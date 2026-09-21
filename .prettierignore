@@ -1,0 +1,13 @@
+.next
+node_modules
+coverage
+playwright-report
+test-results
+public
+src/shared/components/ui
+
+# Documentos de contexto/projeto mantidos manualmente — o formatter de
+# Markdown do Prettier reflow lista numerada e quebra de linha de forma que
+# pode alterar o significado (ex.: renumerar passos). Não formatar.
+CLAUDE.md
+docs/
