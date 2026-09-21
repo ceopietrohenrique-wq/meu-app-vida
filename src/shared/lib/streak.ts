@@ -1,5 +1,12 @@
 import { addDays, format, getDay, parseISO, subDays } from "date-fns";
 
+/**
+ * Cálculo genérico de streak/taxa de conclusão sobre uma lista de datas
+ * "com log" — usado por hábitos (Fase 1), devocional e plano de leitura
+ * (Fase 3). Promovido de `domains/habits/utils/streak.ts` para cá quando um
+ * segundo domínio passou a precisar da mesma lógica (docs/architecture.md >
+ * 13) — nenhum domínio deve reimplementar isso.
+ */
 export type HabitFrequency = "diaria" | "dias_da_semana";
 
 const DATE_FORMAT = "yyyy-MM-dd";
@@ -33,8 +40,8 @@ function previousExpectedDate(date: Date, daysOfWeek: number[]): Date {
 /**
  * Streak atual: dias consecutivos com log, terminando hoje OU ontem (para
  * não zerar a sequência antes de o usuário ter chance de marcar o dia
- * atual). Para hábitos com dias específicos, só os dias esperados contam.
- * Ver docs/business-rules.md > 3.
+ * atual). Para frequências com dias específicos, só os dias esperados
+ * contam. Ver docs/business-rules.md > 3.
  */
 export function computeCurrentStreak(
   loggedDates: string[],

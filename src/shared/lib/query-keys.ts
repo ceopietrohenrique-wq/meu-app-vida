@@ -23,4 +23,11 @@ export const QUERY_KEYS = {
   mealPlans: ["meal-plans"] as const,
   workoutPlans: ["workout-plans"] as const,
   workoutSessions: ["workout-sessions"] as const,
+  devotionals: ["devotionals"] as const,
+  bibleStudyNotes: ["bible-study-notes"] as const,
+  readingPlans: ["reading-plans"] as const,
+  prayers: ["prayers"] as const,
+  savedVerses: ["saved-verses"] as const,
+  spiritualXpSummary: ["spiritual-xp-summary"] as const,
+  spiritualSearch: ["spiritual-search"] as const,
 };

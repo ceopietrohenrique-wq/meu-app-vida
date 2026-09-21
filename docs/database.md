@@ -1,10 +1,11 @@
-# Modelo de Dados — Fase 0, Fase 1 e Fase 2
+# Modelo de Dados — Fase 0, Fase 1, Fase 2 e Fase 3
 
 > Este documento cobre as tabelas necessárias para a Fase 0 (Fundação),
-> Fase 1 (Núcleo de execução) e Fase 2 (Saúde). Tabelas de Espiritual,
-> Financeiro, Negócios, Progresso e Notificações Push serão documentadas nos
-> respectivos `database.md` incrementais (ou seção adicional) quando essas
-> fases começarem. Ver `docs/roadmap.md` para a ordem completa.
+> Fase 1 (Núcleo de execução), Fase 2 (Saúde) e Fase 3 (Espiritual).
+> Tabelas de Financeiro, Negócios, Progresso e Notificações Push serão
+> documentadas nos respectivos `database.md` incrementais (ou seção
+> adicional) quando essas fases começarem. Ver `docs/roadmap.md` para a
+> ordem completa.
 
 ## Convenções
 
@@ -458,7 +459,115 @@ Todas as tabelas desta fase têm RLS habilitado com policies
 é editável — ver comentários inline nas migrations para as exceções
 propositais de imutabilidade, ex.: `weight_logs` sem UPDATE).
 
-## Relacionamentos-chave (Fase 0/1/2)
+## Fase 3 — Espiritual
+
+### `devotionals`
+
+Um registro por dia (`UNIQUE(user_id, date)`) — reenviar o mesmo dia faz
+upsert, nunca cria um segundo registro. Diferente de `weight_logs`, aqui
+existe policy de UPDATE (faz sentido completar o devocional ao longo do
+dia).
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| date | date not null | data local do usuário |
+| passage / theme / reflection / learning / application / prayer / notes | text | todos nullable |
+| duration_minutes | integer | nullable, `> 0` |
+| read_done / reflection_done / prayer_done | boolean not null default false | checklist de leitura/reflexão/oração |
+| created_at / updated_at | timestamptz | |
+
+### `bible_study_notes`
+
+Notas de estudo bíblico associadas a uma passagem.
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| book | text not null | |
+| chapter | smallint not null | `> 0` |
+| verse_start / verse_end | smallint | nullable, `verse_end >= verse_start` |
+| title | text not null | |
+| personal_interpretation / context / questions / application | text | nullable |
+| cross_references | text[] | nullable |
+| tags | text[] | nullable, índice GIN para busca |
+| created_at / updated_at | timestamptz | |
+
+### `reading_plans`
+
+Planos de leitura personalizados. `source`/`template_key` deixam a
+estrutura pronta para planos predefinidos no futuro sem exigir migration
+nova — nenhum catálogo de planos predefinidos existe ainda (ver
+`docs/architecture.md`).
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| name | text not null | |
+| start_date | date not null | |
+| total_days | integer not null | `> 0` |
+| source | text not null default `'custom'` | `custom` ou `predefined` |
+| template_key | text | nullable, referência a um template futuro |
+| is_active | boolean not null default true | |
+| created_at / updated_at | timestamptz | |
+
+### `reading_plan_logs`
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| reading_plan_id | uuid FK → reading_plans | |
+| day_number | integer not null | `> 0` |
+| date | date not null | data local em que o dia foi concluído |
+| notes | text | nullable |
+| created_at | timestamptz | |
+
+Constraint `UNIQUE(reading_plan_id, day_number)` — nunca duplica a
+conclusão do mesmo dia (mesmo padrão de `habit_logs`/`meal_logs`).
+
+### `prayers`
+
+"Transformar um pedido em oração respondida mantendo histórico" é uma
+transição de `type` no mesmo registro (não um novo registro) — histórico
+preservado via `requested_at`/`answered_at`/`updated_at`.
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| type | text not null | `pedido`, `agradecimento`, `respondida` |
+| description | text not null | |
+| requested_at | date not null | |
+| answered_at | date | nullable; obrigatório quando `type = 'respondida'` (check) |
+| notes | text | nullable |
+| created_at / updated_at | timestamptz | |
+
+### `saved_verses`
+
+Sem integração externa nesta fase — `notes` é sempre texto do próprio
+usuário, nunca buscado de uma API bíblica.
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| reference | text not null | ex.: "João 3:16" |
+| book | text not null | |
+| chapter | smallint not null | `> 0` |
+| verse_start | smallint not null | `> 0` |
+| verse_end | smallint | nullable, `>= verse_start` |
+| notes | text | nullable, notas do usuário |
+| tags | text[] | nullable, índice GIN |
+| created_at | timestamptz | |
+
+Todas as tabelas desta fase têm RLS habilitado com policies
+`auth.uid() = user_id`.
+
+## Relacionamentos-chave (Fase 0/1/2/3)
 
 ```
 auth.users (1) — (1) profiles
@@ -487,6 +596,12 @@ profiles (1) — (N) workout_sessions
 workout_sessions (1) — (N) exercise_sets
 workout_exercises (1) — (N) exercise_sets
 profiles (1) — (N) walk_logs
+profiles (1) — (N) devotionals
+profiles (1) — (N) bible_study_notes
+profiles (1) — (N) reading_plans
+reading_plans (1) — (N) reading_plan_logs
+profiles (1) — (N) prayers
+profiles (1) — (N) saved_verses
 ```
 
 ## Notas de simplificação

@@ -1,11 +1,12 @@
-# Regras de Negócio — Fase 1 (Núcleo de Execução) e Fase 2 (Saúde)
+# Regras de Negócio — Fase 1 (Núcleo de Execução), Fase 2 (Saúde) e Fase 3 (Espiritual)
 
-> Cobre as regras críticas necessárias para tarefas, hábitos, XP (Fase 1) e
-> peso/IMC/água/alimentação/treino (Fase 2). Regras de financeiro e negócios
-> (margem, ROI, ticket médio, estoque etc.) serão documentadas quando essas
-> fases começarem. Toda regra aqui descrita precisa ter teste unitário
-> correspondente antes da fase respectiva ser considerada concluída (gate da
-> fase, ver `roadmap.md`).
+> Cobre as regras críticas necessárias para tarefas, hábitos, XP (Fase 1),
+> peso/IMC/água/alimentação/treino (Fase 2) e devocional/estudo bíblico/
+> plano de leitura/orações/versículos (Fase 3). Regras de financeiro e
+> negócios (margem, ROI, ticket médio, estoque etc.) serão documentadas
+> quando essas fases começarem. Toda regra aqui descrita precisa ter teste
+> unitário correspondente antes da fase respectiva ser considerada
+> concluída (gate da fase, ver `roadmap.md`).
 
 ## 1. XP — regra crítica de idempotência
 
@@ -39,6 +40,8 @@ quando aplicável, da data:
 | Refeição planejada marcada "realizada" | `MEAL_PLAN_ADHERENCE:{meal_plan_id}:{date}` |
 | Treino concluído | `WORKOUT_COMPLETED:{workout_session_id}` |
 | Caminhada registrada (1x/dia) | `WALK_LOGGED:{date}` |
+| Devocional do dia (checklist completo) | `DEVOTIONAL:{date}` |
+| Dia do plano de leitura concluído | `READING_PLAN:{reading_plan_id}:{day_number}` |
 
 A tabela `xp_events` tem `UNIQUE(user_id, source_key)`. Qualquer tentativa
 de inserir um evento com a mesma `source_key` para o mesmo usuário falha por
@@ -290,4 +293,84 @@ Conforme `SPEC-ORIGINAL.md` e o gate da Fase 2 (`roadmap.md`):
   treino por sessão, caminhada diária) — unitário (RPC simulada) e teste de
   integração contra o banco real.
 - Teste de integração: usuário A não acessa/gera XP em dados de saúde do
+  usuário B (RLS).
+
+## 14. XP espiritual — nunca transformar espiritualidade em pontuação
+
+Diferente das demais fases, o espiritual é tratado com XP **deliberadamente
+modesto e restrito a dois comportamentos apenas** — não existe XP por criar
+nota de estudo, salvar versículo ou registrar oração, porque essas são
+ações de registro pessoal, não "missões" a cumprir:
+
+| comportamento | XP | granularidade |
+|---|---|---|
+| Devocional do dia com checklist completo (leu + refletiu + orou) | +10 | 1x por dia — texto sozinho sem marcar o checklist não gera XP |
+| Dia do plano de leitura concluído | +10 | 1x por dia do plano (`UNIQUE(reading_plan_id, day_number)`) |
+
+Mesma garantia da seção 1: `xp_events` com `UNIQUE(user_id, source_key)`,
+concedido dentro da mesma RPC que grava o dado de origem (`log_devotional`,
+`complete_reading_day`). Preencher só uma parte do checklist do devocional
+(ex.: só "leu") não gera XP — evita reduzir devocional a "abrir e fechar
+para ganhar pontos".
+
+## 15. Devocional — um registro por dia, editável
+
+- `UNIQUE(user_id, date)` em `devotionals`: reenviar o mesmo dia faz
+  **upsert** (a RPC `log_devotional` atualiza o registro existente), nunca
+  cria um segundo. Diferente de `weight_logs`, aqui a edição do mesmo dia é
+  esperada (o usuário pode preencher a reflexão de manhã e a oração à
+  noite).
+- Streak de constância é **calculado**, nunca armazenado — reaproveita a
+  mesma função pura de streak de hábitos (`shared/lib/streak.ts`,
+  frequência `diaria`), promovida para `shared/lib` nesta fase por já ser
+  usada por dois domínios (ver `docs/architecture.md`).
+
+## 16. Plano de leitura — progresso e streak
+
+- Progresso (`dias concluídos / total`) é calculado a partir de
+  `reading_plan_logs`, nunca uma coluna mutável em `reading_plans`.
+- `UNIQUE(reading_plan_id, day_number)` garante que o mesmo dia do plano
+  nunca é concluído duas vezes — reenviar a mesma conclusão é idempotente
+  tanto para o log quanto para o XP.
+- Streak do plano usa a mesma função pura de `shared/lib/streak.ts` sobre as
+  datas (`date`) dos logs, frequência `diaria`.
+- A estrutura (`reading_plans.source`/`template_key`) já comporta planos
+  predefinidos no futuro, mas nenhum catálogo de planos predefinidos é
+  criado nesta fase — só quando esse recurso for implementado de verdade
+  (ver `docs/architecture.md`, decisão "Modelagem de treino simplificada"
+  para o mesmo princípio aplicado aqui).
+
+## 17. Orações — transição de status, não novo registro
+
+- Transformar um "pedido" em "oração respondida" é um `UPDATE` no mesmo
+  registro (`type = 'respondida'`, `answered_at` preenchido) — nunca um
+  novo registro. O histórico (quando foi pedido, quando foi respondida)
+  fica nas próprias colunas `requested_at`/`answered_at`/`updated_at`.
+- Constraint `check (type <> 'respondida' or answered_at is not null)`
+  impede marcar como respondida sem registrar quando.
+
+## 18. Busca espiritual — nunca uma query insegura
+
+A busca por livro/capítulo/versículo/palavra/tag roda contra
+`bible_study_notes` e `saved_verses` via chamadas parametrizadas do SDK do
+Supabase (`.ilike()`, `.eq()`, `.contains()` para tags) — nunca concatenação
+de string formando SQL dinâmico. Cada filtro (livro, capítulo, versículo,
+palavra, tag) é opcional e combinável; a função de service monta a query
+programaticamente com o query builder, não com string interpolation.
+
+## 19. Testes obrigatórios da Fase 3
+
+Conforme `SPEC-ORIGINAL.md` e o gate da Fase 3 (`roadmap.md`):
+
+- Streak de devocional e de plano de leitura (reaproveitando os testes já
+  existentes de `shared/lib/streak.ts`).
+- XP espiritual nunca duplicado (devocional por dia, plano de leitura por
+  dia do plano) — unitário (RPC simulada) e teste de integração contra o
+  banco real.
+- Checklist do devocional: XP só é concedido com os três itens marcados.
+- Conclusão de dia do plano de leitura nunca duplica (mesmo dia enviado
+  duas vezes).
+- Transição de pedido → respondida preserva `requested_at` e preenche
+  `answered_at`.
+- Teste de integração: usuário A não acessa/gera XP em dados espirituais do
   usuário B (RLS).

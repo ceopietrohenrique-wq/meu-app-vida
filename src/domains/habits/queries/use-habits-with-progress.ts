@@ -5,6 +5,11 @@ import { format, subDays } from "date-fns";
 
 import { todayLocalDateString } from "@/shared/lib/date/local-date";
 import { QUERY_KEYS } from "@/shared/lib/query-keys";
+import {
+  computeBestStreak,
+  computeCompletionRate,
+  computeCurrentStreak,
+} from "@/shared/lib/streak";
 import { createClient } from "@/shared/lib/supabase/client";
 
 import {
@@ -12,11 +17,6 @@ import {
   listHabitLogsSinceForHabits,
 } from "../services/habits-service";
 import type { Habit } from "../types/habit";
-import {
-  computeBestStreak,
-  computeCompletionRate,
-  computeCurrentStreak,
-} from "../utils/streak";
 
 export type HabitWithProgress = Habit & {
   completedToday: boolean;

@@ -206,4 +206,105 @@ describe("buildDailyMissions", () => {
       expect(second.missions.filter((m) => m.type === "water")).toHaveLength(1);
     });
   });
+
+  describe("missões espirituais (Fase 3)", () => {
+    it("sem nenhuma fonte espiritual informada, nenhuma missão espiritual aparece", () => {
+      const summary = buildDailyMissions([], []);
+      expect(
+        summary.missions.filter(
+          (m) => m.type === "devotional" || m.type === "reading_plan",
+        ),
+      ).toEqual([]);
+    });
+
+    it("devocional: elegível todo dia, concluído só com checklist completo", () => {
+      const incompleto = buildDailyMissions(
+        [],
+        [],
+        {},
+        { devotional: { checklistComplete: false, xpReward: 10 } },
+      );
+      expect(
+        incompleto.missions.find((m) => m.type === "devotional")?.completed,
+      ).toBe(false);
+
+      const completo = buildDailyMissions(
+        [],
+        [],
+        {},
+        { devotional: { checklistComplete: true, xpReward: 10 } },
+      );
+      expect(
+        completo.missions.find((m) => m.type === "devotional"),
+      ).toMatchObject({ completed: true, xpReward: 10 });
+    });
+
+    it("plano de leitura: só aparece como missão quando existe plano ativo", () => {
+      const semPlano = buildDailyMissions(
+        [],
+        [],
+        {},
+        {
+          readingPlan: {
+            hasActivePlan: false,
+            completedToday: false,
+            xpReward: 10,
+          },
+        },
+      );
+      expect(
+        semPlano.missions.find((m) => m.type === "reading_plan"),
+      ).toBeUndefined();
+
+      const comPlano = buildDailyMissions(
+        [],
+        [],
+        {},
+        {
+          readingPlan: {
+            hasActivePlan: true,
+            completedToday: true,
+            xpReward: 10,
+          },
+        },
+      );
+      expect(
+        comPlano.missions.find((m) => m.type === "reading_plan"),
+      ).toMatchObject({ completed: true, xpReward: 10 });
+    });
+
+    it("XP espiritual é modesto e nunca condicionado a métricas — o tipo nem aceita valor de progresso espiritual", () => {
+      const summary = buildDailyMissions(
+        [],
+        [],
+        {},
+        { devotional: { checklistComplete: true, xpReward: 10 } },
+      );
+      const mission = summary.missions.find((m) => m.type === "devotional")!;
+      expect(mission.xpReward).toBeLessThanOrEqual(10);
+      expect(Object.keys(mission)).not.toContain("versesRead");
+      expect(Object.keys(mission)).not.toContain("prayersAnswered");
+    });
+
+    it("XP disponível/ganho somam corretamente combinando tarefa, saúde e espiritual", () => {
+      const summary = buildDailyMissions(
+        [{ id: "t1", title: "Tarefa", status: "concluida", xpReward: 10 }],
+        [],
+        { water: { totalMl: 2000, goalMl: 2000, xpReward: 10 } },
+        {
+          devotional: { checklistComplete: true, xpReward: 10 },
+          readingPlan: {
+            hasActivePlan: true,
+            completedToday: false,
+            xpReward: 10,
+          },
+        },
+      );
+
+      expect(summary.totalCount).toBe(4); // tarefa, água, devocional, leitura
+      expect(summary.completedCount).toBe(3); // tarefa, água, devocional
+      expect(summary.xpEarned).toBe(30); // 10+10+10
+      expect(summary.xpAvailable).toBe(40); // 10+10+10+10
+    });
+  });
 });

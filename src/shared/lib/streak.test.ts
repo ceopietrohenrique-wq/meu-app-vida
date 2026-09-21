@@ -5,7 +5,7 @@ import {
   computeCompletionRate,
   computeCurrentStreak,
   isExpectedDay,
-} from "./streak";
+} from "@/shared/lib/streak";
 
 describe("isExpectedDay", () => {
   it("hábito diário espera todo dia", () => {

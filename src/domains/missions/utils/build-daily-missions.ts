@@ -1,17 +1,20 @@
 /**
  * "Missão do dia" não é uma entidade nova no banco — é uma projeção de
  * tarefas de hoje + hábitos elegíveis hoje + comportamentos de saúde
- * elegíveis hoje (Fase 2). Deriva aqui em vez de criar tabela: os dados
- * reais já existem em `tasks`, `habits`/`habit_logs` e nas tabelas de saúde
- * (weight_logs, water_logs, meal_logs, workout_sessions, walk_logs).
+ * elegíveis hoje (Fase 2) + comportamentos espirituais elegíveis hoje
+ * (Fase 3). Deriva aqui em vez de criar tabela: os dados reais já existem
+ * em `tasks`, `habits`/`habit_logs`, nas tabelas de saúde (weight_logs,
+ * water_logs, meal_logs, workout_sessions, walk_logs) e nas tabelas
+ * espirituais (devotionals, reading_plan_logs).
  *
  * IMPORTANTE: esta função só decide o que MOSTRAR e se algo já está
  * concluído — ela nunca concede XP. O XP real continua vindo só das RPCs
  * (complete_task, complete_habit, log_weight, log_water,
- * set_meal_log_status, complete_workout_session, log_walk), cada uma com
- * sua própria garantia de idempotência via `xp_events`. Os `xpReward` aqui
- * são só para exibir "XP disponível/ganho" coerente com o que essas RPCs já
- * concedem (valores em docs/business-rules.md > 7).
+ * set_meal_log_status, complete_workout_session, log_walk, log_devotional,
+ * complete_reading_day), cada uma com sua própria garantia de idempotência
+ * via `xp_events`. Os `xpReward` aqui são só para exibir "XP
+ * disponível/ganho" coerente com o que essas RPCs já concedem (valores em
+ * docs/business-rules.md > 7 e > 14).
  */
 /**
  * Valores de XP de saúde — precisam ficar em sincronia manual com as
@@ -26,6 +29,17 @@ export const HEALTH_MISSION_XP = {
   MEAL: 20,
   WORKOUT: 30,
   WALK: 15,
+} as const;
+
+/**
+ * Idem para XP espiritual — precisa ficar em sincronia manual com
+ * `v_xp_amount` em log_devotional/complete_reading_day (Fase 3). Valores
+ * deliberadamente modestos (docs/business-rules.md > 14): espiritualidade
+ * não é pontuação.
+ */
+export const SPIRITUAL_MISSION_XP = {
+  DEVOTIONAL: 10,
+  READING_PLAN: 10,
 } as const;
 
 export type MissionSourceTask = {
@@ -82,9 +96,36 @@ export type HealthMissionSources = {
   walk?: MissionSourceWalk;
 };
 
+/** Devocional é elegível todo dia — checklist completo = concluído. */
+export type MissionSourceDevotional = {
+  checklistComplete: boolean;
+  xpReward: number;
+};
+
+/** Só é elegível se existe um plano de leitura ativo. */
+export type MissionSourceReadingPlan = {
+  hasActivePlan: boolean;
+  completedToday: boolean;
+  xpReward: number;
+};
+
+export type SpiritualMissionSources = {
+  devotional?: MissionSourceDevotional;
+  readingPlan?: MissionSourceReadingPlan;
+};
+
 export type DailyMission = {
   key: string;
-  type: "task" | "habit" | "weight" | "water" | "meal" | "workout" | "walk";
+  type:
+    | "task"
+    | "habit"
+    | "weight"
+    | "water"
+    | "meal"
+    | "workout"
+    | "walk"
+    | "devotional"
+    | "reading_plan";
   id: string;
   title: string;
   completed: boolean;
@@ -104,6 +145,7 @@ export function buildDailyMissions(
   tasksToday: MissionSourceTask[],
   eligibleHabitsToday: MissionSourceHabit[],
   health: HealthMissionSources = {},
+  spiritual: SpiritualMissionSources = {},
 ): DailyMissionsSummary {
   const seenKeys = new Set<string>();
   const missions: DailyMission[] = [];
@@ -190,6 +232,28 @@ export function buildDailyMissions(
       title: "Caminhada",
       completed: health.walk.loggedToday,
       xpReward: health.walk.xpReward,
+    });
+  }
+
+  if (spiritual.devotional) {
+    addMission({
+      key: "devotional:today",
+      type: "devotional",
+      id: "devotional",
+      title: "Devocional do dia",
+      completed: spiritual.devotional.checklistComplete,
+      xpReward: spiritual.devotional.xpReward,
+    });
+  }
+
+  if (spiritual.readingPlan?.hasActivePlan) {
+    addMission({
+      key: "reading_plan:today",
+      type: "reading_plan",
+      id: "reading_plan",
+      title: "Leitura planejada do dia",
+      completed: spiritual.readingPlan.completedToday,
+      xpReward: spiritual.readingPlan.xpReward,
     });
   }
 

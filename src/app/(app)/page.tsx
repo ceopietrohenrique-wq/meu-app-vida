@@ -3,19 +3,21 @@
 import { CreateHabitDialog } from "@/domains/habits/components/create-habit-dialog";
 import { HabitItem } from "@/domains/habits/components/habit-item";
 import { useHabitsWithProgress } from "@/domains/habits/queries/use-habits-with-progress";
-import { isExpectedDay } from "@/domains/habits/utils/streak";
 import { useWalkLogsToday } from "@/domains/health/queries/use-walk-logs-today";
 import { useWaterToday } from "@/domains/health/queries/use-water-today";
 import { useWeightLogs } from "@/domains/health/queries/use-weight-logs";
 import { isoWeekKey } from "@/domains/health/utils/iso-week";
-import { HealthMissionItem } from "@/domains/missions/components/health-mission-item";
+import { DomainMissionItem } from "@/domains/missions/components/domain-mission-item";
 import {
   buildDailyMissions,
   HEALTH_MISSION_XP,
+  SPIRITUAL_MISSION_XP,
 } from "@/domains/missions/utils/build-daily-missions";
 import { useMealPlansWithStatus } from "@/domains/nutrition/queries/use-meal-plans-with-status";
 import { DailyReviewDialog } from "@/domains/reviews/components/daily-review-dialog";
 import { useProfile } from "@/domains/settings/queries/use-profile";
+import { useDevotionalForDate } from "@/domains/spiritual/queries/use-devotional-for-date";
+import { useReadingPlansWithProgress } from "@/domains/spiritual/queries/use-reading-plans-with-progress";
 import { CreateTaskDialog } from "@/domains/tasks/components/create-task-dialog";
 import { TaskItem } from "@/domains/tasks/components/task-item";
 import { useTodayTasks } from "@/domains/tasks/queries/use-today-tasks";
@@ -26,6 +28,7 @@ import { XpHeader } from "@/domains/xp/components/xp-header";
 import { Skeleton } from "@/shared/components/ui/skeleton";
 import { todayLocalDateString } from "@/shared/lib/date/local-date";
 import { getWeekStartDate } from "@/shared/lib/date/week";
+import { isExpectedDay } from "@/shared/lib/streak";
 
 export default function HomePage() {
   const { data: profile, isLoading: isLoadingProfile } = useProfile();
@@ -48,6 +51,11 @@ export default function HomePage() {
   const { data: workoutPlans = [] } = useWorkoutPlans();
   const { data: recentSessions = [] } = useRecentSessions();
   const { data: walkLogsToday = [] } = useWalkLogsToday(today);
+
+  // Fontes de missão espiritual (Fase 3) — mesma filosofia: só leitura,
+  // nenhuma dessas queries concede XP.
+  const { data: todayDevotional } = useDevotionalForDate(today);
+  const { data: readingPlans = [] } = useReadingPlansWithProgress(today);
 
   const habitsForToday = habits.filter((habit) =>
     isExpectedDay(today, habit.frequency, habit.daysOfWeek),
@@ -96,9 +104,25 @@ export default function HomePage() {
         xpReward: HEALTH_MISSION_XP.WALK,
       },
     },
+    {
+      devotional: {
+        checklistComplete:
+          !!todayDevotional?.readDone &&
+          !!todayDevotional?.reflectionDone &&
+          !!todayDevotional?.prayerDone,
+        xpReward: SPIRITUAL_MISSION_XP.DEVOTIONAL,
+      },
+      readingPlan: {
+        hasActivePlan: readingPlans.length > 0,
+        completedToday: readingPlans.some((plan) =>
+          plan.completedDayNumbers.has(plan.progress.currentDay),
+        ),
+        xpReward: SPIRITUAL_MISSION_XP.READING_PLAN,
+      },
+    },
   );
 
-  const healthMissions = missionsSummary.missions.filter(
+  const extraMissions = missionsSummary.missions.filter(
     (m) => m.type !== "task" && m.type !== "habit",
   );
 
@@ -191,7 +215,7 @@ export default function HomePage() {
           !isLoadingHabits &&
           tasksData?.todayTasks.length === 0 &&
           habitsForToday.length === 0 &&
-          healthMissions.length === 0 && (
+          extraMissions.length === 0 && (
             <p className="text-muted-foreground rounded-md border border-dashed p-4 text-center text-sm">
               Nada planejado para hoje ainda. Que tal adicionar uma tarefa ou um
               hábito?
@@ -205,8 +229,8 @@ export default function HomePage() {
           {habitsForToday.map((habit) => (
             <HabitItem key={habit.id} habit={habit} timezone={timezone} />
           ))}
-          {healthMissions.map((mission) => (
-            <HealthMissionItem key={mission.key} mission={mission} />
+          {extraMissions.map((mission) => (
+            <DomainMissionItem key={mission.key} mission={mission} />
           ))}
         </ul>
       </section>
