@@ -1,3 +1,5 @@
+import { QuickCaptureButton } from "@/shared/components/quick-capture/quick-capture-button";
+
 import { NAV_ITEMS } from "./nav-config";
 import { NavLink } from "./nav-link";
 
@@ -8,6 +10,7 @@ export function AppSidebar() {
       <div className="mb-4 px-2 text-sm font-semibold tracking-tight">
         Minha Vida
       </div>
+      <QuickCaptureButton variant="full" className="mb-4" />
       <nav className="flex flex-col gap-1">
         {NAV_ITEMS.map((item) => (
           <NavLink

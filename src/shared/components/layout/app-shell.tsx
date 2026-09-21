@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import { SignOutButton } from "@/domains/auth/components/sign-out-button";
+import { NotificationBell } from "@/domains/notifications/components/notification-bell";
 
 import { AppSidebar } from "./app-sidebar";
 import { BottomNav } from "./bottom-nav";
@@ -15,7 +16,10 @@ export function AppShell({ children }: { children: ReactNode }) {
             Minha Vida
           </span>
           <div className="hidden md:block" />
-          <SignOutButton />
+          <div className="flex items-center gap-2">
+            <NotificationBell />
+            <SignOutButton />
+          </div>
         </header>
         <main className="flex-1 overflow-y-auto px-4 pt-4 pb-20 md:px-6 md:pb-6">
           {children}
