@@ -1,8 +1,33 @@
 /**
  * "Missão do dia" não é uma entidade nova no banco — é uma projeção de
- * tarefas de hoje + hábitos elegíveis hoje. Deriva aqui em vez de criar
- * tabela: os dados reais já existem em `tasks` e `habits`/`habit_logs`.
+ * tarefas de hoje + hábitos elegíveis hoje + comportamentos de saúde
+ * elegíveis hoje (Fase 2). Deriva aqui em vez de criar tabela: os dados
+ * reais já existem em `tasks`, `habits`/`habit_logs` e nas tabelas de saúde
+ * (weight_logs, water_logs, meal_logs, workout_sessions, walk_logs).
+ *
+ * IMPORTANTE: esta função só decide o que MOSTRAR e se algo já está
+ * concluído — ela nunca concede XP. O XP real continua vindo só das RPCs
+ * (complete_task, complete_habit, log_weight, log_water,
+ * set_meal_log_status, complete_workout_session, log_walk), cada uma com
+ * sua própria garantia de idempotência via `xp_events`. Os `xpReward` aqui
+ * são só para exibir "XP disponível/ganho" coerente com o que essas RPCs já
+ * concedem (valores em docs/business-rules.md > 7).
  */
+/**
+ * Valores de XP de saúde — precisam ficar em sincronia manual com as
+ * constantes `v_xp_amount` das RPCs em supabase/migrations (log_weight=5,
+ * log_water=10, set_meal_log_status=20, complete_workout_session=30,
+ * log_walk=15). Centralizados aqui para não haver um número mágico
+ * diferente em cada tela que monta as fontes de missão de saúde.
+ */
+export const HEALTH_MISSION_XP = {
+  WEIGHT: 5,
+  WATER: 10,
+  MEAL: 20,
+  WORKOUT: 30,
+  WALK: 15,
+} as const;
+
 export type MissionSourceTask = {
   id: string;
   title: string;
@@ -17,9 +42,49 @@ export type MissionSourceHabit = {
   completedToday: boolean;
 };
 
+/** Registrar peso é elegível toda semana (XP semanal, não diário). */
+export type MissionSourceWeight = {
+  loggedThisWeek: boolean;
+  xpReward: number;
+};
+
+export type MissionSourceWater = {
+  totalMl: number;
+  goalMl: number;
+  xpReward: number;
+};
+
+/** Uma missão por refeição planejada ativa. */
+export type MissionSourceMeal = {
+  id: string;
+  name: string;
+  completedToday: boolean;
+  xpReward: number;
+};
+
+/** Só é elegível se o usuário já tem algum plano de treino ativo. */
+export type MissionSourceWorkout = {
+  hasActivePlan: boolean;
+  completedToday: boolean;
+  xpReward: number;
+};
+
+export type MissionSourceWalk = {
+  loggedToday: boolean;
+  xpReward: number;
+};
+
+export type HealthMissionSources = {
+  weight?: MissionSourceWeight;
+  water?: MissionSourceWater;
+  meals?: MissionSourceMeal[];
+  workout?: MissionSourceWorkout;
+  walk?: MissionSourceWalk;
+};
+
 export type DailyMission = {
   key: string;
-  type: "task" | "habit";
+  type: "task" | "habit" | "weight" | "water" | "meal" | "workout" | "walk";
   id: string;
   title: string;
   completed: boolean;
@@ -38,18 +103,22 @@ export type DailyMissionsSummary = {
 export function buildDailyMissions(
   tasksToday: MissionSourceTask[],
   eligibleHabitsToday: MissionSourceHabit[],
+  health: HealthMissionSources = {},
 ): DailyMissionsSummary {
   const seenKeys = new Set<string>();
   const missions: DailyMission[] = [];
 
+  function addMission(mission: DailyMission) {
+    // Guarda contra a mesma fonte aparecer duas vezes (ex.: bug upstream
+    // juntando listas) virar duas missões na Tela Hoje.
+    if (seenKeys.has(mission.key)) return;
+    seenKeys.add(mission.key);
+    missions.push(mission);
+  }
+
   for (const task of tasksToday) {
-    const key = `task:${task.id}`;
-    // Guarda contra a mesma tarefa aparecer duas vezes na fonte (ex.: bug
-    // upstream juntando listas) virar duas missões na Tela Hoje.
-    if (seenKeys.has(key)) continue;
-    seenKeys.add(key);
-    missions.push({
-      key,
+    addMission({
+      key: `task:${task.id}`,
       type: "task",
       id: task.id,
       title: task.title,
@@ -59,16 +128,68 @@ export function buildDailyMissions(
   }
 
   for (const habit of eligibleHabitsToday) {
-    const key = `habit:${habit.id}`;
-    if (seenKeys.has(key)) continue;
-    seenKeys.add(key);
-    missions.push({
-      key,
+    addMission({
+      key: `habit:${habit.id}`,
       type: "habit",
       id: habit.id,
       title: habit.name,
       completed: habit.completedToday,
       xpReward: habit.xpReward,
+    });
+  }
+
+  if (health.weight) {
+    addMission({
+      key: "weight:week",
+      type: "weight",
+      id: "weight",
+      title: "Registrar peso",
+      completed: health.weight.loggedThisWeek,
+      xpReward: health.weight.xpReward,
+    });
+  }
+
+  if (health.water) {
+    addMission({
+      key: "water:today",
+      type: "water",
+      id: "water",
+      title: "Atingir meta de água",
+      completed: health.water.totalMl >= health.water.goalMl,
+      xpReward: health.water.xpReward,
+    });
+  }
+
+  for (const meal of health.meals ?? []) {
+    addMission({
+      key: `meal:${meal.id}`,
+      type: "meal",
+      id: meal.id,
+      title: meal.name,
+      completed: meal.completedToday,
+      xpReward: meal.xpReward,
+    });
+  }
+
+  if (health.workout?.hasActivePlan) {
+    addMission({
+      key: "workout:today",
+      type: "workout",
+      id: "workout",
+      title: "Concluir treino",
+      completed: health.workout.completedToday,
+      xpReward: health.workout.xpReward,
+    });
+  }
+
+  if (health.walk) {
+    addMission({
+      key: "walk:today",
+      type: "walk",
+      id: "walk",
+      title: "Caminhada",
+      completed: health.walk.loggedToday,
+      xpReward: health.walk.xpReward,
     });
   }
 

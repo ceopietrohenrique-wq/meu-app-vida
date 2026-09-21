@@ -1,7 +1,7 @@
-# Modelo de Dados — Fase 0 e Fase 1
+# Modelo de Dados — Fase 0, Fase 1 e Fase 2
 
-> Este documento cobre **somente** as tabelas necessárias para a Fase 0
-> (Fundação) e Fase 1 (Núcleo de execução). Tabelas de Saúde, Espiritual,
+> Este documento cobre as tabelas necessárias para a Fase 0 (Fundação),
+> Fase 1 (Núcleo de execução) e Fase 2 (Saúde). Tabelas de Espiritual,
 > Financeiro, Negócios, Progresso e Notificações Push serão documentadas nos
 > respectivos `database.md` incrementais (ou seção adicional) quando essas
 > fases começarem. Ver `docs/roadmap.md` para a ordem completa.
@@ -258,7 +258,207 @@ Constraint: `UNIQUE(user_id, date)`.
 
 ---
 
-## Relacionamentos-chave (Fase 0/1)
+---
+
+## Fase 2 — Saúde
+
+`profiles.height_cm` (numeric, nullable) foi adicionada nesta fase — altura
+usada como valor padrão sugerido na calculadora de IMC.
+
+### `weight_logs`
+
+Histórico de peso. **Nunca sobrescrito** — cada pesagem é uma linha nova.
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| weight_kg | numeric not null | `> 0 and < 500` |
+| date | date not null | data local do usuário |
+| notes | text | nullable |
+| created_at | timestamptz | |
+
+Sem policy de UPDATE (só select/insert/delete) — reforça a imutabilidade.
+Índice `(user_id, date)`.
+
+### `weight_goals`
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| target_weight_kg | numeric not null | `> 0 and < 500` |
+| target_date | date | nullable |
+| is_active | boolean not null default true | |
+| created_at / updated_at | timestamptz | |
+
+Índice único parcial `(user_id) where is_active` — no máximo uma meta ativa
+por usuário. Trocar de meta é atômico via RPC `set_weight_goal`.
+
+### `body_measurements`
+
+Medidas opcionais (cintura, quadril, peito, braço, coxa), vinculadas a uma
+data, histórico completo (não sobrescreve).
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| date | date not null | |
+| waist_cm / hip_cm / chest_cm / arm_cm / thigh_cm | numeric | todos nullable, mas ao menos um precisa estar presente (check) |
+| notes | text | nullable |
+| created_at | timestamptz | |
+
+### `bmi_records`
+
+Histórico opcional de cálculos de IMC (salvar é opt-in — calcular não exige
+salvar). Ver `business-rules.md` para a fórmula/validação.
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| weight_kg / height_cm / bmi | numeric not null | todos `> 0` |
+| category | text not null | classificação textual (ex.: "Peso normal") |
+| created_at | timestamptz | |
+
+### `water_settings`
+
+1:1 com o usuário (mesmo padrão de `profiles`, PK = `user_id`).
+
+| coluna | tipo | notas |
+|---|---|---|
+| user_id | uuid PK/FK | |
+| daily_goal_ml | integer not null default 2000 | `> 0 and <= 10000` |
+| updated_at | timestamptz | |
+
+### `water_logs`
+
+Log por evento (cada "+250ml" é uma linha) — nunca um contador mutável.
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| date | date not null | |
+| amount_ml | integer not null | `> 0 and <= 5000` |
+| created_at | timestamptz | |
+
+### `meal_plans`
+
+Refeições planejadas (template recorrente, ex.: Café da manhã, Almoço).
+Macros/calorias sempre nullable — adesão é a prioridade, não contagem
+completa.
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| name | text not null | |
+| time | time | nullable |
+| items | text | descrição livre |
+| calories / protein_g / carbs_g / fat_g | numeric | todos nullable |
+| order_index | integer not null default 0 | |
+| is_active | boolean not null default true | |
+| created_at / updated_at | timestamptz | |
+
+### `meal_logs`
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| meal_plan_id | uuid FK → meal_plans | |
+| date | date not null | |
+| status | text | `realizada`, `parcial`, `nao_realizada` |
+| notes | text | nullable |
+| created_at / updated_at | timestamptz | |
+
+Constraint `UNIQUE(meal_plan_id, date)` — um status por refeição por dia,
+base do upsert via RPC `set_meal_log_status` e da idempotência do XP de
+adesão.
+
+### `workout_plans`
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| name | text not null | ex.: "Treino A (Peito+Tríceps)" |
+| muscle_groups | text | nullable, descrição livre |
+| notes | text | nullable |
+| is_active | boolean not null default true | |
+| created_at / updated_at | timestamptz | |
+
+### `workout_exercises`
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| workout_plan_id | uuid FK → workout_plans | |
+| name | text not null | |
+| muscle_group | text | nullable |
+| order_index | integer not null default 0 | |
+| planned_sets | integer | nullable, `> 0` |
+| planned_reps | text | nullable, texto livre (ex.: "8-12") |
+| planned_load_kg | numeric | nullable |
+| rest_seconds | integer | nullable |
+| notes | text | nullable |
+| created_at / updated_at | timestamptz | |
+
+### `workout_sessions`
+
+Execução real de um plano num dia. `completed_at` nulo = treino em
+andamento.
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| workout_plan_id | uuid FK → workout_plans | nullable (permite treino avulso) |
+| date | date not null | |
+| started_at | timestamptz not null default now() | |
+| completed_at | timestamptz | nullable |
+| notes | text | nullable |
+| created_at | timestamptz | |
+
+### `exercise_sets`
+
+Cada série é uma linha própria (carga, repetições, ordem).
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| workout_session_id | uuid FK → workout_sessions | |
+| workout_exercise_id | uuid FK → workout_exercises | |
+| set_order | integer not null | `> 0` |
+| load_kg | numeric | nullable |
+| reps | integer | nullable |
+| created_at | timestamptz | |
+
+### `walk_logs`
+
+Registro simples de caminhada (só para sustentar o comportamento "caminhada"
+da lista de XP de saúde — não é um domínio de cardio completo).
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| date | date not null | |
+| duration_minutes | integer not null | `> 0 and <= 600` |
+| distance_km | numeric | nullable |
+| notes | text | nullable |
+| created_at | timestamptz | |
+
+Todas as tabelas desta fase têm RLS habilitado com policies
+`auth.uid() = user_id` (SELECT/INSERT no mínimo; UPDATE/DELETE quando o dado
+é editável — ver comentários inline nas migrations para as exceções
+propositais de imutabilidade, ex.: `weight_logs` sem UPDATE).
+
+## Relacionamentos-chave (Fase 0/1/2)
 
 ```
 auth.users (1) — (1) profiles
@@ -273,6 +473,20 @@ profiles (1) — (N) xp_events
 profiles (1) — (N) inbox_items
 profiles (1) — (N) notifications
 profiles (1) — (N) daily_reviews
+profiles (1) — (N) weight_logs
+profiles (1) — (N) weight_goals
+profiles (1) — (N) body_measurements
+profiles (1) — (N) bmi_records
+profiles (1) — (1) water_settings
+profiles (1) — (N) water_logs
+profiles (1) — (N) meal_plans
+meal_plans (1) — (N) meal_logs
+profiles (1) — (N) workout_plans
+workout_plans (1) — (N) workout_exercises
+profiles (1) — (N) workout_sessions
+workout_sessions (1) — (N) exercise_sets
+workout_exercises (1) — (N) exercise_sets
+profiles (1) — (N) walk_logs
 ```
 
 ## Notas de simplificação

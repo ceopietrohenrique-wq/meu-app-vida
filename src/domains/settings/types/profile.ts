@@ -5,6 +5,7 @@ export type Profile = {
   weekStart: number;
   currency: string;
   weeklyXpGoal: number;
+  heightCm: number | null;
   onboardingCompletedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -18,6 +19,7 @@ export type ProfileRow = {
   week_start: number;
   currency: string;
   weekly_xp_goal: number;
+  height_cm: number | null;
   onboarding_completed_at: string | null;
   created_at: string;
   updated_at: string;
@@ -31,6 +33,7 @@ export function mapProfileRow(row: ProfileRow): Profile {
     weekStart: row.week_start,
     currency: row.currency,
     weeklyXpGoal: row.weekly_xp_goal,
+    heightCm: row.height_cm,
     onboardingCompletedAt: row.onboarding_completed_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

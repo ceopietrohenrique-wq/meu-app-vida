@@ -10,7 +10,10 @@ import { NavLink } from "./nav-link";
  * Configurações — as únicas rotas reais equivalentes até aqui.
  */
 export function BottomNav() {
-  const [first, second, ...rest] = NAV_ITEMS;
+  const bottomNavItems = NAV_ITEMS.filter(
+    (item) => item.showInBottomNav !== false,
+  );
+  const [first, second, ...rest] = bottomNavItems;
 
   return (
     <nav
