@@ -120,10 +120,16 @@ UI (componente/página)
 
 - Todo valor monetário persistido usa `numeric/decimal` no Postgres — nunca
   `float`/`double precision`.
-- No TypeScript, valores monetários trafegam como string/number inteiro em
-  centavos (a decidir na implementação do domínio `finance`) e toda
-  formatação/arredondamento passa por helpers centralizados em
-  `shared/lib/money`. Nunca formatação manual espalhada pelo código.
+- No TypeScript, valores monetários trafegam sempre como **inteiro de
+  centavos** (decidido na Fase 4): o Postgres continua `numeric` como fonte
+  de verdade, mas a fronteira UI/serviço nunca soma `number` fracionário.
+  Parsing (string decimal → centavos) e formatação (centavos → string
+  decimal / moeda BRL) passam por `shared/lib/money.ts`, nunca formatação
+  manual espalhada pelo código. Zod schemas de formulário validam o campo
+  como string decimal (`requiredMoneyInput`/`optionalMoneyInput` em
+  `domains/finance/schemas/money-input.ts`) e convertem via essa mesma
+  função — nunca `Number(value) * 100`, que reintroduziria erro de
+  arredondamento.
 
 ## 7. XP — idempotência (visão arquitetural)
 
@@ -186,6 +192,17 @@ tem fallback quando o browser/dispositivo não suporta um recurso
 | Saúde na bottom nav (mobile) | fora por enquanto (`showInBottomNav: false`), só na sidebar de desktop | bottom nav mobile tem só 5 slots fixos (Hoje·Planejamento·(+)·Progresso·Menu); "Progresso" e "Menu" ainda não existem como telas — ocupar um dos 2 slots reais restantes com Saúde deslocaria Inbox/Configurações. Reavaliar quando "Menu"/"Progresso" existirem (Fase 6) |
 | Cálculo de streak compartilhado | movido de `domains/habits/utils/streak.ts` para `shared/lib/streak.ts` | Fase 3 precisa da mesma lógica para devocional e plano de leitura; um segundo domínio consumindo o util de outro violaria a regra de não importar internals entre domínios — `shared/lib` é o lugar certo assim que 2+ domínios precisam do mesmo cálculo puro |
 | Modelagem de treino simplificada | `workout_plans` já representa o "treino" nomeado (Treino A/B/C — não existe uma tabela `workouts` separada agrupando vários); `workout_exercises` funde catálogo + vínculo plano↔exercício (não existe tabela `exercises` genérica reutilizável entre planos) | menos tabelas para o mesmo dado real da Fase 2, sem perda de integridade (cada série referencia sessão + exercício via FK, RLS completo). **Limitação conhecida**: o mesmo exercício (ex.: "Supino Reto") cadastrado em dois planos diferentes vira duas linhas de `workout_exercises` sem vínculo entre si — `última carga`/`melhor desempenho`/`volume` são calculados por `workout_exercise_id`, então não se somam entre planos. Aceitável para a Fase 2 (specs de exemplo mostram histórico por plano); se o produto precisar de PR consolidado por exercício entre planos, extrair uma tabela `exercises` catálogo + `workout_exercises` como tabela de vínculo pura, migrando os dados existentes |
+| Dinheiro em TS | inteiro de centavos, nunca `number` fracionário | evita erro de ponto flutuante em somas repetidas (dashboard, orçamento); Postgres continua `numeric` como fonte de verdade, conversão centralizada em `shared/lib/money.ts` |
+| Transferência financeira | uma única linha em `finance_transactions` (`account_id` origem + `transfer_account_id` destino), nunca duas linhas de income/expense | garante por construção que transferência nunca duplica receita/despesa — não há nada para reconciliar entre duas linhas |
+| Saldo de conta financeira | sempre calculado (`get_finance_accounts_with_balance`), nunca coluna mutável | mesma filosofia de streak/volume de treino — elimina por construção o risco de saldo dessincronizar ao editar/cancelar transação |
+| Cancelamento de transação | soft-delete via `canceled_at`, nunca `DELETE` físico | preserva histórico/auditoria; como o saldo é sempre calculado excluindo `canceled_at is not null`, cancelar nunca deixa o saldo inconsistente |
+| Alerta de orçamento | trigger `AFTER INSERT/UPDATE` em `finance_transactions` (não RPC dedicada) | qualquer caminho que insira uma transação (client direto ou geração de recorrência) dispara a checagem sem duplicar a lógica em dois lugares; dedup real é `UNIQUE(budget_id, threshold_percent, period_month)` |
+| Ownership cruzado em `finance_transactions`/`finance_recurrences`/`finance_budgets` | triggers dedicados (`*_validate_ownership`) bloqueiam `account_id`/`transfer_account_id`/`category_id` de outro usuário, e também contexto (`pessoal`/`empresarial`) inconsistente entre a transação/recorrência/orçamento e a conta/categoria referenciada | RLS sozinha não impede referenciar o *id* de uma linha de outro usuário que existe de verdade (só impede *ler* essa linha). Cobertura estendida na auditoria Fase 4 para as três tabelas (inicialmente só `finance_transactions` tinha a defesa; `finance_recurrences`/`finance_budgets` ficavam só com RLS — risco fechado após a auditoria explicitamente pedir a regra de consistência de contexto) |
+| Idempotência de double-submit em transações financeiras | `client_request_id` (UUID gerado no client por "intenção de envio") + `UNIQUE(user_id, client_request_id)` + RPC `create_finance_transaction` com `ON CONFLICT DO NOTHING` e fallback de leitura | mesma filosofia de `xp_events`/`source_key`, mas para transações que não geram XP; a proteção de UI (botão desabilitado) não é suficiente sozinha (CLAUDE.md > Idempotência e concorrência) — decidido na auditoria Fase 4 após o pedido explícito de comprovar que transferência (e transação em geral) não pode ser aplicada duas vezes por clique duplo/retry |
+| Thresholds de alerta configuráveis | `finance_budgets.alert_thresholds smallint[]`, default `{80,90,100}`, em vez de lista fixa no código do trigger | CLAUDE.md/spec pede "80/90/100 como padrão sugerido", não fixo; o trigger `finance_check_budget_alerts` agora itera sobre o array do próprio orçamento — dedup continua sendo a mesma `UNIQUE(budget_id, threshold_percent, period_month)` |
+| "Contas próximas" do dashboard | reaproveita `listTransactions` filtrado para `transaction_date > hoje`, sem cancelamento, sem transferência | as ocorrências futuras já existem como linhas reais em `finance_transactions` (geradas por `generate_finance_recurrence_occurrences`) — criar uma tabela/serviço de "previsão" separado duplicaria a fonte de verdade sem necessidade |
+| Filtro por período do Financeiro | `PeriodNavigator` (mês anterior/atual/seguinte) sobre `monthOffset`, sem seletor de intervalo customizado na UI | a RPC (`get_finance_dashboard_summary`) já aceita qualquer intervalo arbitrário — só a UI ficou limitada a navegação mensal por ser o que a spec exige (mês atual como padrão, navegação mês a mês); intervalo customizado livre fica para quando houver demanda real, sem exigir mudança de schema/RPC |
+| Quick Capture financeiro | reaproveita `createTransactionSchema`/`create_finance_transaction` do domínio `finance` (contexto fixo `pessoal`, `client_request_id` próprio) em vez de uma rota de captura paralela | mantém a regra "nunca duas fontes de verdade para a mesma operação de dinheiro"; o Quick Capture é só mais um ponto de entrada para a mesma RPC |
 
 ## 14. Prioridade em caso de conflito
 

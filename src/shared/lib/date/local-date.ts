@@ -17,3 +17,16 @@ export function toLocalDateString(date: Date, timeZone: string): string {
 export function todayLocalDateString(timeZone: string): string {
   return toLocalDateString(new Date(), timeZone);
 }
+
+/**
+ * Converte uma string `yyyy-MM-dd` num `Date` usando o construtor LOCAL
+ * (ano, mês, dia), nunca `new Date(dateOnly)` — que interpreta a string
+ * como meia-noite UTC e, em timezones atrás de UTC (ex.: Brasil, UTC-3),
+ * desloca o dia 1 do mês para o dia 28/30/31 do mês anterior ao exibir em
+ * hora local, corrompendo `startOfMonth`/`endOfMonth`/`format(..., "yyyy-MM")`
+ * calculados a partir dele.
+ */
+export function parseLocalDateOnly(dateOnly: string): Date {
+  const [year, month, day] = dateOnly.split("-").map(Number);
+  return new Date(year!, month! - 1, day!);
+}

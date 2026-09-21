@@ -30,4 +30,10 @@ export const QUERY_KEYS = {
   savedVerses: ["saved-verses"] as const,
   spiritualXpSummary: ["spiritual-xp-summary"] as const,
   spiritualSearch: ["spiritual-search"] as const,
+  financeAccounts: ["finance-accounts"] as const,
+  financeCategories: ["finance-categories"] as const,
+  financeTransactions: ["finance-transactions"] as const,
+  financeRecurrences: ["finance-recurrences"] as const,
+  financeBudgets: ["finance-budgets"] as const,
+  financeDashboard: ["finance-dashboard"] as const,
 };

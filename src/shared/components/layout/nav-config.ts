@@ -6,6 +6,7 @@ import {
   Home,
   Inbox,
   Settings,
+  Wallet,
 } from "lucide-react";
 
 export type NavItem = {
@@ -37,6 +38,12 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Espiritual",
     href: "/espiritual",
     icon: BookOpen,
+    showInBottomNav: false,
+  },
+  {
+    label: "Financeiro",
+    href: "/financeiro",
+    icon: Wallet,
     showInBottomNav: false,
   },
   { label: "Inbox", href: "/inbox", icon: Inbox },

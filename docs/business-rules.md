@@ -1,12 +1,13 @@
-# Regras de Negócio — Fase 1 (Núcleo de Execução), Fase 2 (Saúde) e Fase 3 (Espiritual)
+# Regras de Negócio — Fase 1 (Núcleo de Execução), Fase 2 (Saúde), Fase 3 (Espiritual) e Fase 4 (Financeiro)
 
 > Cobre as regras críticas necessárias para tarefas, hábitos, XP (Fase 1),
-> peso/IMC/água/alimentação/treino (Fase 2) e devocional/estudo bíblico/
-> plano de leitura/orações/versículos (Fase 3). Regras de financeiro e
-> negócios (margem, ROI, ticket médio, estoque etc.) serão documentadas
-> quando essas fases começarem. Toda regra aqui descrita precisa ter teste
-> unitário correspondente antes da fase respectiva ser considerada
-> concluída (gate da fase, ver `roadmap.md`).
+> peso/IMC/água/alimentação/treino (Fase 2), devocional/estudo bíblico/
+> plano de leitura/orações/versículos (Fase 3) e contas/transações/
+> categorias/orçamentos/recorrências (Fase 4). Regras de negócios (margem,
+> ROI, ticket médio, estoque etc.) serão documentadas quando essa fase
+> começar. Toda regra aqui descrita precisa ter teste unitário
+> correspondente antes da fase respectiva ser considerada concluída (gate
+> da fase, ver `roadmap.md`).
 
 ## 1. XP — regra crítica de idempotência
 
@@ -374,3 +375,177 @@ Conforme `SPEC-ORIGINAL.md` e o gate da Fase 3 (`roadmap.md`):
   `answered_at`.
 - Teste de integração: usuário A não acessa/gera XP em dados espirituais do
   usuário B (RLS).
+
+## 20. Dinheiro — nunca float
+
+Todo valor monetário persistido é `numeric` no Postgres. No TypeScript, todo
+valor monetário trafega como **inteiro de centavos**, nunca `number`
+fracionário — soma repetida de centavos nunca sofre o erro clássico de
+ponto flutuante (`0.1 + 0.2 !== 0.3`). Parsing/formatação são centralizados
+em `shared/lib/money.ts` (`parseMoneyToCents`, `centsToDecimalString`,
+`formatCurrencyBRL`), nunca espalhados pelo código. Nenhuma função de
+dinheiro retorna `NaN`/`Infinity` — entrada inválida vira `0`/`R$ 0,00`.
+
+## 21. Contas e saldo — sempre calculado, nunca armazenado
+
+`finance_accounts.initial_balance` é o único valor mutável relacionado a
+saldo. O saldo exibido é sempre `initial_balance` + soma de
+`finance_transactions` não canceladas que afetam aquela conta
+(`get_finance_accounts_with_balance`), mesma filosofia de streak/volume de
+treino calculados nas fases anteriores — nunca uma coluna de saldo
+denormalizada, o que eliminaria por construção qualquer risco de
+dessincronização ao editar/cancelar uma transação.
+
+## 22. Transações — tipo define o efeito, valor sempre positivo
+
+- `amount` é sempre `> 0` (constraint). O efeito no saldo depende
+  exclusivamente do `type`, nunca do sinal do valor armazenado.
+- Transferência (`type = 'transfer'`) é **uma única linha**: `account_id`
+  (origem) + `transfer_account_id` (destino). Isso é o que garante, por
+  construção, que uma transferência nunca duplica receita/despesa — não
+  existem duas linhas (uma de saída, outra de entrada) para reconciliar.
+- "Cancelar" uma transação é sempre soft-delete (`canceled_at`), nunca
+  `DELETE` físico nem edição que perderia o histórico. Como o saldo é
+  sempre calculado excluindo `canceled_at is not null`, cancelar ou editar
+  uma transação nunca deixa o saldo inconsistente — não há nada para
+  reconciliar manualmente.
+- Trigger `finance_transactions_validate_ownership` impede que
+  `account_id`/`transfer_account_id`/`category_id` apontem para uma
+  conta/categoria de outro usuário (defesa em profundidade além da RLS), e
+  também impede contexto inconsistente (ver seção 23).
+- **Double-submit** (clique duplo, retry de rede): criar transação sempre
+  passa pela RPC `create_finance_transaction`, nunca por um insert direto do
+  client. O client gera um `client_request_id` (UUID) uma única vez por
+  "intenção de envio" (não a cada clique) e reenvia essa mesma chave em toda
+  tentativa daquele envio; `UNIQUE(user_id, client_request_id)` no banco
+  garante que reenviar a mesma chave nunca cria uma segunda transação — a
+  RPC faz `INSERT ... ON CONFLICT DO NOTHING` e, se o conflito ocorrer, lê e
+  retorna a linha já existente, então o resultado é idêntico para o client
+  esteja isso na primeira tentativa ou num reenvio (auditoria Fase 4 > 1).
+  Aplica-se a toda transação, inclusive e principalmente transferências.
+
+## 23. Pessoal x Empresarial — nunca misturados por padrão
+
+- Toda conta, categoria, transação, recorrência e orçamento tem `context`
+  (`pessoal` ou `empresarial`). O dashboard e as listagens filtram por um
+  único contexto por padrão; a visão consolidada (soma dos dois) só aparece
+  quando o usuário escolhe explicitamente essa opção — nunca é o
+  comportamento padrão.
+- **Regra de consistência definida na auditoria (Fase 4 > 7)**: o `context`
+  de uma transação precisa ser IGUAL ao `context` de toda conta/categoria
+  que ela referencia — nunca uma transação `pessoal` usando conta ou
+  categoria `empresarial` (e vice-versa), inclusive a conta de destino de
+  uma transferência. A mesma regra vale para `finance_recurrences`
+  (`account_id`/`category_id`) e `finance_budgets` (`category_id`).
+  Garantido pelos triggers `finance_transactions_validate_ownership`,
+  `finance_recurrences_validate_ownership` e
+  `finance_budgets_validate_ownership` — nunca só pela UI.
+
+## 24. Recorrências — geração idempotente
+
+- `generate_finance_recurrence_occurrences(p_recurrence_id, p_until)` gera
+  as ocorrências (linhas em `finance_transactions`) da recorrência até a
+  data pedida, respeitando `day_of_month` (meses mais curtos usam o último
+  dia do mês), `ends_on` e `total_installments`.
+- Idempotência real: `UNIQUE(recurrence_id, transaction_date)` parcial em
+  `finance_transactions` — chamar a função de novo para o mesmo período
+  nunca duplica uma ocorrência já gerada, e ocorrências antigas nunca são
+  sobrescritas (mesmo padrão de `task_recurrences` na Fase 1).
+- "Gerar previsões futuras" é uma ação explícita (criar a recorrência já
+  gera uma janela inicial; um botão "Gerar próximas" estende a janela) —
+  nunca um job invisível rodando sem o usuário saber.
+
+## 25. Orçamentos — planejado/realizado/restante, nunca dividir por zero
+
+`computeBudgetProgress(plannedCents, realizedCents)` calcula
+planejado/realizado/restante/percentual. `planned_amount > 0` é garantido
+pelo banco (constraint), mas a função ainda se protege: percentual só é
+calculado quando `plannedCents > 0`, senão retorna `null` ("sem dados"),
+nunca `NaN`/`Infinity` — mesmo padrão de `computeCompletionRate` (Fase 1) e
+da taxa de adesão alimentar (Fase 2).
+
+## 26. Alertas de orçamento — thresholds configuráveis, dedup por threshold/período
+
+- `finance_budgets.alert_thresholds` (`smallint[]`, default `{80,90,100}`) é
+  configurável por orçamento na criação — 80/90/100 é só o padrão sugerido,
+  nunca um valor fixo no código (auditoria Fase 4 > 5). Cada valor precisa
+  estar entre 1 e 500.
+- Trigger `finance_check_budget_alerts` (AFTER INSERT/UPDATE em
+  `finance_transactions`) recalcula o realizado do mês para a categoria da
+  transação e, para cada threshold do PRÓPRIO orçamento (`alert_thresholds`)
+  cruzado, tenta inserir uma linha em `finance_budget_alerts`.
+- `UNIQUE(budget_id, threshold_percent, period_month)` é a garantia real de
+  dedup — o mesmo threshold nunca notifica duas vezes no mesmo período,
+  mesmo que várias transações cruzem o mesmo patamar depois. Uma única
+  transação que ultrapassa vários thresholds de uma vez (ex.: 70% → 130%)
+  notifica cada um exatamente uma vez. Um novo `period_month` (mês
+  seguinte) sempre permite novos alertas para o mesmo orçamento/categoria.
+- A notificação em si (`notifications`, reaproveitada da Fase 1) usa
+  `notification_key = 'BUDGET_ALERT:{budget_id}:{threshold}:{period_month}'`,
+  segunda camada de dedup independente da primeira.
+
+## 27. Dashboard — filtros por período e contas próximas
+
+- `get_finance_dashboard_summary(p_context, p_period_start, p_period_end)`
+  aceita qualquer intervalo de datas — mês atual (padrão da UI), mês
+  anterior, ou um intervalo arbitrário — já que `transaction_date` é sempre
+  comparado com `between`/`gte`/`lte` sobre `date` puro, nunca timestamp com
+  fuso. A UI (`PeriodNavigator`) usa mês atual como padrão
+  (`monthOffset = 0`) e permite navegar mês a mês (auditoria Fase 4 > 3).
+- `parseLocalDateOnly` (`shared/lib/date/local-date.ts`), não
+  `new Date(dateOnlyString)`, é usado para calcular `startOfMonth`/
+  `endOfMonth` a partir da data local do usuário — `new Date("2026-03-01")`
+  interpreta a string como meia-noite UTC, o que desloca o dia 1 do mês
+  para o mês anterior em timezones atrás de UTC (ex.: Brasil) ao extrair
+  ano/mês/dia em hora local, corrompendo o período calculado.
+- "Contas próximas" reaproveita as transações futuras já geradas por
+  `generate_finance_recurrence_occurrences` — nenhum sistema paralelo de
+  previsão. É simplesmente `listTransactions` filtrado para
+  `transaction_date > hoje`, não cancelada, não-transferência, ordenada por
+  data (auditoria Fase 4 > 4).
+
+## 28. Quick Capture — gasto e receita
+
+O botão global de Quick Capture (Fase 1) inclui uma opção "Gasto ou
+receita" que reaproveita o MESMO schema Zod (`createTransactionSchema`) e a
+mesma RPC (`create_finance_transaction`, com `client_request_id` próprio)
+do registro rápido do domínio Financeiro — nunca uma lógica de dinheiro
+paralela fora do domínio `finance` (auditoria Fase 4 > 8). Contexto fixo em
+`pessoal` (captura rápida global não pede escolha de contexto, para manter
+os "poucos campos" — se precisar lançar algo empresarial rapidamente, o
+fluxo completo do domínio Financeiro continua disponível).
+
+## 29. Testes obrigatórios da Fase 4
+
+Conforme `SPEC-ORIGINAL.md` e o gate da Fase 4 (`roadmap.md`):
+
+- `shared/lib/money.ts`: parsing/formatação com valores conhecidos, nunca
+  `NaN`/`Infinity`, soma repetida sem erro de ponto flutuante.
+- `computeBudgetProgress`: valores conhecidos (ex.: R$ 620/R$ 800 = 78%),
+  denominador zero/negativo retorna `null`.
+- Teste de integração: usuário A não acessa/edita/cancela dados financeiros
+  do usuário B, e não consegue referenciar conta/categoria de outro usuário
+  numa transação (RLS + trigger de ownership) — cobre as 6 tabelas da fase.
+- Teste de integração: geração de recorrência nunca duplica ocorrência
+  (chamada repetida, mesmo período) e respeita `total_installments`.
+- Teste de integração: alertas de orçamento nunca notificam o mesmo
+  threshold duas vezes no mesmo período (default 80/90/100 E thresholds
+  customizados), mesmo cruzando vários de uma vez; novo mês permite novos
+  alertas.
+- Teste de integração: transferência é atômica, idempotente por
+  `client_request_id` (double-submit não duplica), nunca conta como
+  receita/despesa, e afeta corretamente o saldo das duas contas envolvidas
+  com valores exatos (sem tolerância de float).
+- Teste de integração: saldo de conta com números conhecidos cobrindo saldo
+  inicial + receita + despesa + transferência enviada + transferência
+  recebida + transação cancelada, assert exato em centavos.
+- Teste de integração: filtros por período (mês atual, mês anterior,
+  intervalo customizado, limites de início/fim exatos).
+- Teste de integração: precisão monetária com valores clássicos de erro de
+  float (0,10 + 0,20), várias transações com centavos, orçamento com
+  centavos — assert exato via `parseMoneyToCents`, nunca `toBeCloseTo`.
+- Teste de integração: contexto pessoal/empresarial não se mistura (conta e
+  categoria de contexto errado são rejeitadas) e a visão consolidada soma
+  os dois explicitamente.
+- Teste de integração: cancelar uma transação exclui do saldo/dashboard sem
+  apagar o histórico (soft cancel).

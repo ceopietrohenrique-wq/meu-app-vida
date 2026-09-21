@@ -1,8 +1,8 @@
-# Modelo de Dados — Fase 0, Fase 1, Fase 2 e Fase 3
+# Modelo de Dados — Fase 0, Fase 1, Fase 2, Fase 3 e Fase 4
 
 > Este documento cobre as tabelas necessárias para a Fase 0 (Fundação),
-> Fase 1 (Núcleo de execução), Fase 2 (Saúde) e Fase 3 (Espiritual).
-> Tabelas de Financeiro, Negócios, Progresso e Notificações Push serão
+> Fase 1 (Núcleo de execução), Fase 2 (Saúde), Fase 3 (Espiritual) e Fase 4
+> (Financeiro). Tabelas de Negócios, Progresso e Notificações Push serão
 > documentadas nos respectivos `database.md` incrementais (ou seção
 > adicional) quando essas fases começarem. Ver `docs/roadmap.md` para a
 > ordem completa.
@@ -567,7 +567,154 @@ usuário, nunca buscado de uma API bíblica.
 Todas as tabelas desta fase têm RLS habilitado com policies
 `auth.uid() = user_id`.
 
-## Relacionamentos-chave (Fase 0/1/2/3)
+## Fase 4 — Financeiro
+
+Dinheiro é sempre `numeric` no Postgres (nunca float). No TypeScript, todo
+valor monetário trafega como inteiro de centavos, convertido num único lugar
+centralizado (`shared/lib/money.ts`) — ver `docs/architecture.md` > Dinheiro.
+
+### `finance_accounts`
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| name | text not null | |
+| type | text not null | `carteira`, `conta_bancaria`, `cartao`, `caixa_empresa`, `outra` |
+| initial_balance | numeric not null default 0 | opcional na criação (default 0) |
+| is_active | boolean not null default true | |
+| context | text not null | `pessoal` ou `empresarial` |
+| created_at / updated_at | timestamptz | |
+
+Saldo **nunca** é uma coluna mutável — é sempre calculado por
+`get_finance_accounts_with_balance()` a partir de `initial_balance` +
+`finance_transactions` não canceladas (mesma filosofia de streak/volume de
+treino calculados, não armazenados).
+
+### `finance_categories`
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| name | text not null | |
+| context | text not null | `pessoal` ou `empresarial` |
+| created_at | timestamptz | |
+
+`UNIQUE(user_id, context, name)` evita duplicação sem impedir o mesmo nome
+em contextos diferentes ou entre usuários diferentes.
+
+### `finance_transactions`
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| account_id | uuid FK → finance_accounts | |
+| type | text not null | `income`, `expense`, `transfer` |
+| context | text not null | `pessoal` ou `empresarial` |
+| amount | numeric not null | sempre `> 0` — o efeito no saldo depende do `type`, nunca do sinal |
+| description | text | nullable |
+| category_id | uuid FK → finance_categories | nullable |
+| transaction_date | date not null | |
+| payment_method | text | nullable |
+| business_id / sale_id | uuid | nullable, sem FK — mesma lógica de `tasks.project_id` na Fase 1: tabelas `businesses`/`sales` só existem na Fase 5 |
+| transfer_account_id | uuid FK → finance_accounts | nullable; obrigatório e `<> account_id` quando `type = 'transfer'`, sempre nulo nos demais tipos (check) |
+| recurrence_id | uuid FK → finance_recurrences | nullable |
+| notes | text | nullable |
+| canceled_at | timestamptz | nullable — "cancelar" é soft-delete (nunca DELETE físico), excluído do saldo/dashboard |
+| client_request_id | uuid | nullable — chave de idempotência de double-submit (auditoria Fase 4 > 1), gerada uma vez no client por "intenção de envio" |
+| created_at / updated_at | timestamptz | |
+
+Transferência é **uma única linha** (`account_id` origem + `transfer_account_id`
+destino) — nunca duas linhas de income/expense, o que garante que
+transferências não duplicam receita/despesa.
+
+Índices: `(user_id, transaction_date)`, `(user_id, account_id)`,
+`(user_id, category_id)`, único parcial `(recurrence_id, transaction_date)
+where recurrence_id is not null` (idempotência da geração de recorrência),
+único parcial `(user_id, client_request_id) where client_request_id is not
+null` (idempotência de double-submit).
+
+Criar transação (client) sempre passa pela RPC `create_finance_transaction`,
+nunca por um `INSERT` direto — é ela que garante atomicidade + idempotência
+via `ON CONFLICT (user_id, client_request_id) DO NOTHING` seguido de leitura
+da linha já existente quando a chave já foi usada. Testes de banco (via
+`.from().insert()` direto) continuam funcionando porque a RPC é uma
+conveniência sobre a tabela, não a única via de escrita permitida por RLS.
+
+Trigger `finance_transactions_validate_ownership`: bloqueia
+`account_id`/`transfer_account_id`/`category_id` apontando para conta/categoria
+de OUTRO usuário, e também bloqueia contexto inconsistente — uma transação
+`pessoal` não pode usar conta/categoria `empresarial` (e vice-versa),
+inclusive a conta de destino de uma transferência (auditoria Fase 4 > 7).
+Mesma defesa (ownership + contexto) existe em `finance_recurrences`
+(`finance_recurrences_validate_ownership`) e `finance_budgets`
+(`finance_budgets_validate_ownership`).
+
+### `finance_recurrences`
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| name | text not null | |
+| type | text not null | `income` ou `expense` |
+| context | text not null | |
+| account_id | uuid FK → finance_accounts | |
+| category_id | uuid FK → finance_categories | nullable |
+| payment_method | text | nullable |
+| amount | numeric not null | `> 0` |
+| day_of_month | smallint not null | 1-31; meses mais curtos usam o último dia do mês |
+| starts_on | date not null | |
+| ends_on | date | nullable |
+| total_installments | integer | nullable — null = sem fim por quantidade (assinatura), preenchido = parcelamento com fim (ex.: 12x) |
+| is_active | boolean not null default true | |
+| created_at / updated_at | timestamptz | |
+
+Ocorrências viram linhas próprias em `finance_transactions` via
+`generate_finance_recurrence_occurrences(p_recurrence_id, p_until)` — nunca
+sobrescritas, geração idempotente (mesmo padrão de `task_recurrences`).
+
+### `finance_budgets`
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| category_id | uuid FK → finance_categories | |
+| context | text not null | |
+| period_month | date not null | sempre normalizado para o dia 1 do mês (check) |
+| planned_amount | numeric not null | `> 0` |
+| alert_thresholds | smallint[] not null default `{80,90,100}` | percentuais que disparam alerta — configurável por orçamento na criação; 80/90/100 é só o padrão sugerido (auditoria Fase 4 > 5), cada valor entre 1 e 500 |
+| created_at / updated_at | timestamptz | |
+
+`UNIQUE(user_id, category_id, period_month)` — um orçamento por categoria
+por mês. Planejado/realizado/restante/percentual são calculados (nunca
+armazenados) — ver `src/domains/finance/utils/budget-progress.ts`.
+
+### `finance_budget_alerts`
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| budget_id | uuid FK → finance_budgets | |
+| threshold_percent | smallint not null | qualquer valor entre 1 e 500 — o conjunto realmente usado é `finance_budgets.alert_thresholds` daquele orçamento |
+| period_month | date not null | |
+| notified_at | timestamptz not null default now() | |
+
+`UNIQUE(budget_id, threshold_percent, period_month)` é a garantia real de
+deduplicação — o mesmo threshold nunca notifica duas vezes no mesmo período.
+Inserido pelo trigger `finance_check_budget_alerts` (AFTER INSERT/UPDATE em
+`finance_transactions`), que também insere em `notifications` (reaproveitada
+da Fase 1) com `notification_key = 'BUDGET_ALERT:{budget_id}:{threshold}:{period_month}'`.
+Sem policy de UPDATE/DELETE — histórico de alertas é imutável.
+
+Todas as tabelas desta fase têm RLS habilitado com policies
+`auth.uid() = user_id`.
+
+## Relacionamentos-chave (Fase 0/1/2/3/4)
 
 ```
 auth.users (1) — (1) profiles
@@ -602,6 +749,14 @@ profiles (1) — (N) reading_plans
 reading_plans (1) — (N) reading_plan_logs
 profiles (1) — (N) prayers
 profiles (1) — (N) saved_verses
+profiles (1) — (N) finance_accounts
+profiles (1) — (N) finance_categories
+finance_accounts (1) — (N) finance_transactions
+finance_categories (1) — (N) finance_transactions
+finance_accounts (1) — (N) finance_recurrences
+finance_recurrences (1) — (N) finance_transactions
+finance_categories (1) — (N) finance_budgets
+finance_budgets (1) — (N) finance_budget_alerts
 ```
 
 ## Notas de simplificação
