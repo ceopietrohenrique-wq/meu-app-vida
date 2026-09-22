@@ -1,13 +1,12 @@
-# Regras de Negócio — Fase 1 (Núcleo de Execução), Fase 2 (Saúde), Fase 3 (Espiritual) e Fase 4 (Financeiro)
+# Regras de Negócio — Fase 1 (Núcleo de Execução), Fase 2 (Saúde), Fase 3 (Espiritual), Fase 4 (Financeiro) e Fase 5 (Negócios)
 
 > Cobre as regras críticas necessárias para tarefas, hábitos, XP (Fase 1),
 > peso/IMC/água/alimentação/treino (Fase 2), devocional/estudo bíblico/
-> plano de leitura/orações/versículos (Fase 3) e contas/transações/
-> categorias/orçamentos/recorrências (Fase 4). Regras de negócios (margem,
-> ROI, ticket médio, estoque etc.) serão documentadas quando essa fase
-> começar. Toda regra aqui descrita precisa ter teste unitário
-> correspondente antes da fase respectiva ser considerada concluída (gate
-> da fase, ver `roadmap.md`).
+> plano de leitura/orações/versículos (Fase 3), contas/transações/
+> categorias/orçamentos/recorrências (Fase 4) e clientes/leads/catálogo/
+> ofertas/vendas/estoque/indicadores empresariais (Fase 5). Toda regra aqui
+> descrita precisa ter teste unitário correspondente antes da fase
+> respectiva ser considerada concluída (gate da fase, ver `roadmap.md`).
 
 ## 1. XP — regra crítica de idempotência
 
@@ -549,3 +548,260 @@ Conforme `SPEC-ORIGINAL.md` e o gate da Fase 4 (`roadmap.md`):
   os dois explicitamente.
 - Teste de integração: cancelar uma transação exclui do saldo/dashboard sem
   apagar o histórico (soft cancel).
+
+## 30. Contexto empresarial — genérico, nunca acoplado a um negócio específico
+
+`businesses` é a única entidade nova de "contexto empresarial" — a
+arquitetura não é codificada para um tipo específico de negócio (plaquinhas,
+sites, serviços digitais...). Todo cliente/catálogo/oferta/venda tem
+`business_id` nullable: sem negócio específico é o padrão (permite usar o
+produto sem nunca criar um `business`), e um usuário pode ter vários
+negócios simultâneos. Financeiro (Fase 4) não é duplicado — Negócios
+reaproveita `finance_accounts`/`finance_categories`/`finance_transactions`
+(contexto `empresarial`) diretamente.
+
+## 31. Pipeline de clientes/leads — sem CRM excessivamente complexo
+
+- Lead e cliente são a MESMA linha em `customers`, diferenciados só pelo
+  `stage`: `possivel_cliente` → `contato_feito` → `interessado` →
+  `proposta_enviada` → `negociacao` → `fechado`/`perdido`. Nunca duas
+  tabelas com "conversão" de lead para cliente.
+- "Próxima ação" (`next_action`/`next_action_date`/`next_action_time`/
+  `next_action_notes`) são colunas na própria linha — um cliente ativo tem
+  no máximo uma próxima ação pendente por vez. Essa é a fonte única que o
+  Dashboard/Hoje vai ler no futuro (Fase 6+); nenhum dado duplicado numa
+  tabela de tarefas paralela.
+- Histórico de interações (`customer_interactions`) é sempre um INSERT
+  novo, nunca edição — `ligacao`, `whatsapp`, `instagram`, `visita`,
+  `email`, `proposta`, `nota`. Sem policy de UPDATE/DELETE: histórico
+  imutável, mesma filosofia de `weight_logs` (Fase 2).
+
+## 32. Catálogo e ofertas — preço padrão nunca é a fonte da venda
+
+- `catalog_items.default_price`/`default_cost` são só o PADRÃO sugerido.
+  `tracks_inventory` só pode ser `true` quando `type = 'produto'` (check no
+  banco) — serviço nunca controla estoque.
+- `offers`/`offer_items` são um TEMPLATE. Vender uma oferta gera sempre um
+  snapshot independente em `sale_items` — o template nunca é escrito no
+  momento da venda, o que é o mecanismo real que permite "customizar uma
+  oferta para um cliente sem alterar o template global" (CLAUDE.md > Fase 5
+  > 5): a customização acontece editando os itens da VENDA
+  (`unit_price`/`discount_amount` por item), nunca a oferta.
+- Cálculo de kit (`computeOfferPricing`, `src/domains/offers/utils/`): soma
+  individual dos itens, desconto (percentual sobre a soma ou valor fixo em
+  centavos, nunca sobre o custo), preço final, custo estimado, lucro
+  estimado, margem estimada. Desconto nunca deixa o preço final negativo
+  (`Math.min(desconto, soma individual)`). Margem retorna `null` quando o
+  preço final é `<= 0`, nunca `NaN`/`Infinity`.
+
+## 33. Vendas — status define o que conta, nunca o inverso
+
+- Status: `draft` → `negotiating` → `confirmed` → `paid` → `delivered`, ou
+  `cancelled`/`refunded` a partir de qualquer estado não-terminal.
+  `REVENUE_STATUSES = ('confirmed', 'paid', 'delivered')` é a ÚNICA lista
+  usada em todo cálculo de faturamento/receita/custo/margem/ROI/ticket
+  médio/produto mais vendido — `draft`/`negotiating` nunca contam (ainda não
+  são vendas reais), `cancelled`/`refunded` NUNCA contam, mesmo que a venda
+  já tenha sido paga antes de ser reembolsada.
+- `gross_amount`/`discount_amount`/`net_amount`/`direct_costs` são SEMPRE
+  calculados pela RPC `create_sale` a partir dos itens recebidos — nunca
+  aceitos prontos do client. `net_amount = gross_amount - discount_amount`.
+- Excluir uma venda (`DELETE`) só é permitido em `draft`/`negotiating`
+  (trigger `sales_prevent_delete_committed`) — uma venda confirmada/paga/
+  entregue/cancelada/reembolsada só muda de estado via `update_sale_status`,
+  nunca é apagada (preserva o histórico financeiro/de estoque).
+
+## 34. sale_items — snapshot, nunca referência viva ao catálogo
+
+- Cada item de uma venda grava nome, tipo, quantidade, preço unitário,
+  desconto, custo unitário e total NO MOMENTO da venda — nunca uma
+  referência que é relida do catálogo depois. Mudar
+  `catalog_items.default_price` no futuro NUNCA altera uma venda antiga
+  (testado explicitamente: ver seção 38).
+- `catalog_item_id` usa `on delete restrict` — não é possível apagar um item
+  de catálogo referenciado por uma venda histórica (só desativar via
+  `is_active = false`), preservando a integridade do snapshot mesmo que o
+  catálogo mude.
+- Sem policy de UPDATE/DELETE em `sale_items`: é sempre um snapshot
+  imutável. Corrigir uma venda em `draft`/`negotiating` é excluir a venda
+  inteira (cascade apaga os itens) e recriar — nunca editar um item
+  isolado.
+
+## 35. Estoque — sempre calculado, nunca armazenado
+
+- Estoque atual é sempre a soma de `inventory_movements.quantity_delta`
+  (`get_inventory_levels()`), nunca uma coluna mutável — mesma filosofia de
+  saldo de conta financeira (Fase 4) e streak de hábito (Fase 1).
+- Só itens com `type = 'produto'` e `tracks_inventory = true` movimentam
+  estoque. Serviço NUNCA gera movimentação, e produto com
+  `tracks_inventory = false` também nunca gera — ambos os casos são
+  ignorados silenciosamente pelo loop de baixa/estorno em
+  `apply_sale_status_effects`.
+- Baixa de estoque (`type = 'venda'`, delta negativo) acontece na PRIMEIRA
+  vez que a venda entra num status de `REVENUE_STATUSES`
+  (`confirmed`/`paid`/`delivered`), vinda de fora desse conjunto — nunca se
+  repete numa segunda transição dentro do mesmo conjunto (ex.:
+  `confirmed` → `paid` não baixa de novo). Guard: `sales.stock_deducted_at`.
+- Estoque insuficiente bloqueia a transição com exceção — não existe
+  backorder/estoque negativo nesta fase (CLAUDE.md > Fase 5 > 8: "não
+  permitir estoque negativo sem regra explícita"; nenhuma regra explícita de
+  override foi criada, então o comportamento padrão é bloquear).
+- Estorno (`type = 'estorno'`, delta positivo) acontece quando a venda vai
+  para `cancelled`/`refunded` E já tinha baixado estoque antes E ainda não
+  tinha sido revertida. Guard: `sales.stock_reverted_at`. Reverte
+  exatamente a mesma quantidade que foi baixada, nunca recalculada.
+- Movimentações manuais (`entrada`/`saida`/`ajuste`) só existem fora do
+  fluxo de vendas (`reference_sale_id` sempre nulo — check no banco impede
+  o contrário) e suportam a mesma proteção de idempotência via
+  `client_request_id` das operações críticas.
+
+## 36. Atomicidade e idempotência de vendas
+
+- `create_sale` insere `sales` + todos os `sale_items` numa única transação
+  (uma função PL/pgSQL = uma transação) — nunca várias mutations soltas do
+  client que podem ficar pela metade.
+- Idempotência de criação: `client_request_id` gerado uma vez no client por
+  "intenção de envio" (não a cada clique) + `UNIQUE(user_id,
+  client_request_id)` + `INSERT ... ON CONFLICT DO NOTHING` com fallback de
+  leitura da linha já existente — mesmo padrão da Fase 4
+  (`create_finance_transaction`).
+- Se a venda já nasce num status comprometido (`p_status = 'confirmed'` etc.
+  em `create_sale`), os MESMOS efeitos de `update_sale_status` (baixa de
+  estoque com validação, lançamento de receita) são aplicados dentro da
+  mesma transação, via a função interna compartilhada
+  `apply_sale_status_effects` — nunca uma venda criada direto como
+  "confirmada" escapa da baixa de estoque só porque não passou por uma
+  chamada de transição separada.
+- Idempotência/concorrência real de `update_sale_status`: `SELECT ... FOR
+  UPDATE` na venda serializa chamadas concorrentes sobre a MESMA linha — as
+  duas transações concorrentes nunca leem o mesmo estado "antigo"
+  simultaneamente, então os guards (`stock_deducted_at`,
+  `stock_reverted_at`, `revenue_transaction_id`) funcionam mesmo sob
+  concorrência real (duas chamadas com `client_request_id` DIFERENTES,
+  não só reenvio idêntico). `client_request_id` por chamada (tabela
+  `sale_status_changes`) cobre o caso adicional de retry idêntico.
+- Reflexo financeiro (lançamento de receita em `finance_transactions`) só
+  acontece na PRIMEIRA vez que a venda entra em `paid`, e só se a venda tem
+  `account_id` definido (reflexo automático é opt-in por venda). Guard:
+  `sales.revenue_transaction_id`.
+- **XP**: nenhuma regra de XP foi documentada para vendas nesta fase — Fase
+  5 não concede XP por criar cliente, catálogo, oferta ou venda. Decisão
+  deliberada, mesma filosofia da seção 14 (XP espiritual): resultado de
+  negócio (dinheiro, vendas) não deve virar pontuação de jogo. Se essa regra
+  mudar no futuro, precisa ser documentada aqui primeiro (CLAUDE.md > Fase 5
+  > 9: "XP, se existir regra documentada").
+- **Reversão financeira de venda reembolsada**: decisão de escopo —
+  reembolsar/cancelar uma venda paga reverte o estoque, mas NÃO cria
+  automaticamente uma transação financeira de estorno/reversão. O
+  lançamento de receita original permanece (histórico imutável de
+  `finance_transactions`, mesma filosofia da Fase 4); se o usuário precisar
+  refletir o reembolso no Financeiro, cancela a transação manualmente pela
+  tela de Financeiro (`cancelTransaction`, já existente). Documentado aqui
+  como limitação conhecida, não como bug.
+
+## 37. Definições dos indicadores — Dashboard empresarial
+
+Central, única fonte de verdade (RPC `get_business_dashboard_summary`) —
+nunca calculado de formas diferentes em dois lugares. `REVENUE_STATUSES =
+('confirmed', 'paid', 'delivered')` (ver seção 33) é a base de tudo abaixo.
+Nenhum indicador aqui é apuração contábil/fiscal oficial.
+
+- **Faturamento bruto**: soma de `gross_amount` de vendas em
+  `REVENUE_STATUSES` no período.
+- **Receita líquida**: soma de `net_amount` (já é bruto − desconto) das
+  mesmas vendas — "menos devoluções/reembolsos" é garantido porque uma
+  venda `refunded` nunca está em `REVENUE_STATUSES`, então nunca é somada
+  em nenhum indicador de receita, independente de quando o reembolso
+  aconteceu.
+- **Custo direto (COGS)**: soma de `direct_costs` das mesmas vendas
+  (calculado a partir de `sale_items.unit_cost × quantity` no momento da
+  criação da venda).
+- **Lucro bruto**: receita líquida − custo direto.
+- **Despesas operacionais atribuídas**: soma de `finance_transactions` tipo
+  `expense`, contexto `empresarial`, não canceladas, no período —
+  reaproveita o Financeiro (Fase 4) diretamente, nunca uma segunda tabela
+  de despesas.
+- **Taxas**: soma de `sales.fees` das vendas em `REVENUE_STATUSES` no
+  período (tratadas separadamente de despesas operacionais, como a spec
+  pede explicitamente).
+- **Lucro líquido gerencial**: lucro bruto − despesas operacionais − taxas.
+  Nunca chamado de "lucro contábil/fiscal oficial" na UI.
+- **Margem**: lucro bruto / receita líquida × 100. `null` (nunca
+  `NaN`/`Infinity`) quando receita líquida `<= 0`.
+- **ROI**: lucro bruto / custo direto × 100 — proxy de retorno sobre o
+  investimento em custo direto (COGS), já que esta fase não tem uma entidade
+  de "investimento" dedicada (ex.: gasto de marketing rastreado por
+  campanha). `null` quando custo direto `<= 0` ("investimento não
+  identificável" — CLAUDE.md > Fase 5 > 11 pede exatamente esse
+  comportamento). Documentado como limitação conhecida — ver seção 39.
+- **Ticket médio**: receita líquida / quantidade de vendas em
+  `REVENUE_STATUSES` no período. `null` quando não há vendas.
+- **Produto mais vendido**: item de catálogo com maior soma de `quantity`
+  em `sale_items` das vendas do período (`REVENUE_STATUSES`).
+- **Produto mais lucrativo**: item de catálogo com maior soma de
+  `(unit_price × quantity − discount_amount − unit_cost × quantity)` no
+  período.
+- **Leads**: contagem de `customers` criados no período (cohort de
+  criação — ver limitação na seção 39).
+- **Conversão**: contagem de `customers` com `stage = 'fechado'` **criados**
+  no período / leads do período × 100. `null` quando não há leads no
+  período. Simplificação documentada: usa o cohort de criação, não a data
+  exata em que o estágio mudou para `fechado` (não existe hoje um campo de
+  "data de fechamento" — ver seção 39).
+- **Follow-ups pendentes**: contagem de `customers` com `next_action_date`
+  preenchido (qualquer data, vencida ou futura) — representa "ainda precisa
+  de follow-up", não um filtro de "vencido hoje".
+
+Funções puras espelhando as mesmas fórmulas (para teste unitário sem
+depender do banco): `src/domains/business/utils/business-indicators.ts`.
+
+## 38. Testes obrigatórios da Fase 5
+
+Conforme `SPEC-ORIGINAL.md` e o gate da Fase 5 (`roadmap.md`):
+
+- `computeOfferPricing`: valores conhecidos (soma individual, desconto
+  percentual/fixo, preço final nunca negativo, margem `null` quando preço
+  final `<= 0`).
+- `business-indicators.ts` (lucro bruto/líquido, margem, ROI, ticket médio,
+  conversão): valores conhecidos, incluindo o caso obrigatório do CLAUDE.md
+  (bruto 1000, desconto 100, líquida 900, custo direto 200, taxas 50) e
+  denominador zero sempre retornando `null`, nunca `NaN`/`Infinity`.
+- Teste de integração com números exatos contra o banco real (RPC
+  `create_sale`/`get_business_dashboard_summary`) reproduzindo o mesmo caso
+  obrigatório, mais: várias vendas, venda cancelada, venda reembolsada
+  (mesmo já paga), denominador zero, centavos, kit com múltiplos itens,
+  alteração posterior de preço no catálogo não afetando o snapshot
+  histórico — nunca `toBeCloseTo` para dinheiro.
+- Teste de integração de estoque: estoque inicial, venda reduz estoque,
+  double-submit (chamadas concorrentes) reduz uma única vez, cancelamento
+  reverte uma única vez mesmo chamado duas vezes, serviço nunca altera
+  estoque, item sem controle de estoque nunca altera estoque, movimentação
+  manual com `client_request_id` nunca duplica.
+- Teste de integração de idempotência/concorrência: `create_sale` com
+  chamadas concorrentes e a mesma `client_request_id` cria uma única venda;
+  `update_sale_status` com chamadas concorrentes (client_request_id
+  diferentes) sobre a mesma venda aplica o efeito uma única vez; reenviar a
+  mesma `client_request_id` em `update_sale_status` não reaplica o efeito;
+  chamar `paid` duas vezes sem `client_request_id` ainda assim não duplica a
+  receita (guard real é `revenue_transaction_id`, não só o dedup).
+- Teste de integração: usuário A não acessa/edita/cancela dados de Negócios
+  do usuário B, e não consegue referenciar cliente/catálogo/oferta/conta de
+  outro usuário numa venda ou oferta (RLS + triggers de ownership) — cobre
+  as 10 tabelas da fase.
+
+## 39. Limitações conhecidas da Fase 5 (documentadas, não bugs)
+
+- **ROI** usa custo direto (COGS) como proxy de "investimento" — não existe
+  rastreamento de investimento dedicado (ex.: gasto de marketing por
+  campanha). Se o produto precisar de ROI de marketing/campanha
+  especificamente, isso é uma entidade nova a modelar depois, não uma
+  correção desta fórmula.
+- **Conversão** usa o cohort de criação do lead (leads criados no período
+  vs. fechados dentro do mesmo período de criação), não a data exata da
+  transição para `fechado` — não existe hoje uma coluna
+  `stage_changed_at`/histórico de estágio. Se precisar de funil exato por
+  data de transição, seria necessário um histórico de mudança de estágio
+  (mesmo padrão de `customer_interactions`, mas para `stage`).
+- **Reembolso não gera reversão financeira automática** — ver seção 36.
+- **Sem backorder/estoque negativo com override explícito** — estoque
+  insuficiente sempre bloqueia a confirmação da venda nesta fase.

@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   BookOpen,
+  Briefcase,
   CalendarRange,
   Heart,
   Home,
@@ -44,6 +45,12 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Financeiro",
     href: "/financeiro",
     icon: Wallet,
+    showInBottomNav: false,
+  },
+  {
+    label: "Negócios",
+    href: "/negocios",
+    icon: Briefcase,
     showInBottomNav: false,
   },
   { label: "Inbox", href: "/inbox", icon: Inbox },

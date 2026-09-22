@@ -36,4 +36,12 @@ export const QUERY_KEYS = {
   financeRecurrences: ["finance-recurrences"] as const,
   financeBudgets: ["finance-budgets"] as const,
   financeDashboard: ["finance-dashboard"] as const,
+  businesses: ["businesses"] as const,
+  customers: ["customers"] as const,
+  customerInteractions: ["customer-interactions"] as const,
+  catalogItems: ["catalog-items"] as const,
+  offers: ["offers"] as const,
+  sales: ["sales"] as const,
+  inventoryLevels: ["inventory-levels"] as const,
+  businessDashboard: ["business-dashboard"] as const,
 };

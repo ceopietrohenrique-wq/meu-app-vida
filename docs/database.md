@@ -1,9 +1,9 @@
-# Modelo de Dados — Fase 0, Fase 1, Fase 2, Fase 3 e Fase 4
+# Modelo de Dados — Fase 0, Fase 1, Fase 2, Fase 3, Fase 4 e Fase 5
 
 > Este documento cobre as tabelas necessárias para a Fase 0 (Fundação),
-> Fase 1 (Núcleo de execução), Fase 2 (Saúde), Fase 3 (Espiritual) e Fase 4
-> (Financeiro). Tabelas de Negócios, Progresso e Notificações Push serão
-> documentadas nos respectivos `database.md` incrementais (ou seção
+> Fase 1 (Núcleo de execução), Fase 2 (Saúde), Fase 3 (Espiritual), Fase 4
+> (Financeiro) e Fase 5 (Negócios). Tabelas de Progresso e Notificações Push
+> serão documentadas nos respectivos `database.md` incrementais (ou seção
 > adicional) quando essas fases começarem. Ver `docs/roadmap.md` para a
 > ordem completa.
 
@@ -618,7 +618,7 @@ em contextos diferentes ou entre usuários diferentes.
 | category_id | uuid FK → finance_categories | nullable |
 | transaction_date | date not null | |
 | payment_method | text | nullable |
-| business_id / sale_id | uuid | nullable, sem FK — mesma lógica de `tasks.project_id` na Fase 1: tabelas `businesses`/`sales` só existem na Fase 5 |
+| business_id / sale_id | uuid FK → businesses/sales | nullable; FK adicionada de verdade na Fase 5 quando essas tabelas passaram a existir (migration `20260927010000`/`20260927010600`) — mesma lógica de `tasks.project_id` na Fase 1 |
 | transfer_account_id | uuid FK → finance_accounts | nullable; obrigatório e `<> account_id` quando `type = 'transfer'`, sempre nulo nos demais tipos (check) |
 | recurrence_id | uuid FK → finance_recurrences | nullable |
 | notes | text | nullable |
@@ -714,7 +714,230 @@ Sem policy de UPDATE/DELETE — histórico de alertas é imutável.
 Todas as tabelas desta fase têm RLS habilitado com policies
 `auth.uid() = user_id`.
 
-## Relacionamentos-chave (Fase 0/1/2/3/4)
+## Fase 5 — Negócios
+
+Arquitetura genérica (CLAUDE.md > Fase 5 > 1): nenhuma tabela é modelada
+para um tipo específico de negócio. `businesses` é o único conceito novo de
+"contexto empresarial" — reaproveita `finance_accounts`/`finance_categories`/
+`finance_transactions` (contexto `empresarial`) já existentes, nunca duplica
+"conta"/"categoria" dentro de Negócios.
+
+### `businesses`
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| name | text not null | |
+| segment | text | nullable |
+| notes | text | nullable |
+| is_active | boolean not null default true | |
+| created_at / updated_at | timestamptz | |
+
+Um usuário pode ter zero, um ou vários negócios. Toda entidade de Negócios
+tem `business_id` nullable (sem negócio específico = compartilhado).
+
+### `customers`
+
+Lead e cliente são a MESMA entidade em estágios diferentes do pipeline
+(`stage`) — nunca duas tabelas separadas.
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| business_id | uuid FK → businesses | nullable |
+| name | text not null | |
+| company / phone / whatsapp / instagram / email / segment / city / notes | text | todos nullable |
+| stage | text not null default `possivel_cliente` | `possivel_cliente`, `contato_feito`, `interessado`, `proposta_enviada`, `negociacao`, `fechado`, `perdido` |
+| next_action / next_action_notes | text | nullable |
+| next_action_date | date | nullable |
+| next_action_time | time | nullable |
+| created_at / updated_at | timestamptz | |
+
+"Próxima ação" fica em colunas na própria linha (nunca uma tabela à parte):
+um cliente ativo tem no máximo uma próxima ação pendente por vez — fonte
+única para o Dashboard/Hoje consumir no futuro sem duplicar dado.
+
+### `customer_interactions`
+
+Histórico de interações — imutável (sem UPDATE/DELETE).
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| customer_id | uuid FK → customers | |
+| type | text not null | `ligacao`, `whatsapp`, `instagram`, `visita`, `email`, `proposta`, `nota` |
+| notes | text | nullable |
+| occurred_at | timestamptz not null default now() | |
+| created_at | timestamptz | |
+
+### `catalog_items`
+
+Item genérico — produto físico ou serviço (`type`).
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| business_id | uuid FK → businesses | nullable |
+| name | text not null | |
+| type | text not null | `produto` ou `servico` |
+| description | text | nullable |
+| default_price | numeric not null | `>= 0` — só o PADRÃO sugerido, nunca lido no momento da venda (ver `sale_items`) |
+| default_cost | numeric not null default 0 | `>= 0` |
+| is_active | boolean not null default true | |
+| sku | text | nullable |
+| tracks_inventory | boolean not null default false | check: só `type = 'produto'` pode ser `true` |
+| category | text | nullable |
+| created_at / updated_at | timestamptz | |
+
+### `offers` / `offer_items`
+
+Kits/ofertas são só o TEMPLATE — vender uma oferta nunca escreve nela,
+sempre gera um snapshot em `sale_items` (ver abaixo), então customizar uma
+oferta para um cliente específico nunca altera o template global.
+
+`offers`:
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| business_id | uuid FK → businesses | nullable |
+| name | text not null | |
+| description | text | nullable |
+| discount_type | text | nullable, `percent` ou `fixed` |
+| discount_value | numeric | nullable; percent = 0-100, fixed = valor em reais |
+| is_active | boolean not null default true | |
+| created_at / updated_at | timestamptz | |
+
+`offer_items`:
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| offer_id | uuid FK → offers | |
+| catalog_item_id | uuid FK → catalog_items | |
+| quantity | integer not null | `> 0` |
+| unit_price_override | numeric | nullable — null usa `catalog_items.default_price` |
+| created_at | timestamptz | |
+
+### `sales` / `sale_items`
+
+`gross_amount`/`discount_amount`/`net_amount`/`direct_costs` em `sales` são
+SEMPRE calculados pela RPC `create_sale` a partir de `sale_items` — nunca
+digitados livremente. `sale_items` é sempre um snapshot (nome, tipo, preço,
+custo, desconto) no momento da venda — mudar o preço futuro do catálogo
+NUNCA altera uma venda antiga, porque a venda não lê `catalog_items` de novo
+depois de criada.
+
+`sales`:
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| business_id | uuid FK → businesses | nullable |
+| customer_id | uuid FK → customers | nullable |
+| account_id | uuid FK → finance_accounts | nullable — reflexo financeiro automático é opt-in por venda |
+| status | text not null default `draft` | `draft`, `negotiating`, `confirmed`, `paid`, `delivered`, `cancelled`, `refunded` |
+| gross_amount / discount_amount / net_amount / direct_costs / fees | numeric | todos `>= 0`; `discount_amount <= gross_amount` |
+| payment_method / responsible / notes | text | nullable |
+| sale_date | date not null | |
+| client_request_id | uuid | nullable — idempotência de double-submit na criação |
+| stock_deducted_at / stock_reverted_at | timestamptz | nullable — guards de idempotência dos efeitos colaterais |
+| revenue_transaction_id | uuid FK → finance_transactions | nullable — guard + link do lançamento de receita |
+| created_at / updated_at | timestamptz | |
+
+`UNIQUE(user_id, client_request_id)` parcial garante que reenviar a mesma
+chave nunca cria uma segunda venda.
+
+`sale_items`:
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| sale_id | uuid FK → sales | |
+| catalog_item_id | uuid FK → catalog_items | `on delete restrict` — preserva o histórico mesmo se o item for descontinuado |
+| item_name / item_type | text | snapshot |
+| quantity | integer not null | `> 0` |
+| unit_price / unit_cost / discount_amount / total | numeric | snapshot, todos `>= 0` |
+| tracks_inventory | boolean not null | snapshot — decide se a venda baixa estoque |
+| created_at | timestamptz | |
+
+Sem policy de UPDATE/DELETE em `sale_items` — snapshot imutável; corrigir
+uma venda em draft/negotiating é excluir a venda inteira (cascade) e
+recriar. `sales` não pode ser excluída fora de `draft`/`negotiating`
+(trigger `sales_prevent_delete_committed`) — só cancelar/reembolsar via
+status.
+
+### `inventory_settings` / `inventory_movements`
+
+Estoque atual NUNCA é uma coluna mutável — é sempre a soma de
+`inventory_movements` (mesma filosofia de saldo de conta na Fase 4 e streak
+de hábito na Fase 1), exposta via RPC `get_inventory_levels()`.
+`inventory_settings` guarda só a configuração (estoque mínimo).
+
+`inventory_settings`:
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| catalog_item_id | uuid FK → catalog_items | `UNIQUE` |
+| minimum_quantity | integer | nullable, `>= 0` |
+| created_at / updated_at | timestamptz | |
+
+`inventory_movements`:
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| catalog_item_id | uuid FK → catalog_items | |
+| type | text not null | `entrada`, `saida`, `ajuste`, `venda`, `estorno` |
+| quantity_delta | integer not null | `<> 0`; sinal já embutido (negativo = saída) |
+| reference_sale_id | uuid FK → sales | nullable; obrigatório quando `type` é `venda`/`estorno`, sempre nulo nos demais (check) |
+| notes | text | nullable |
+| client_request_id | uuid | nullable — idempotência de double-submit em lançamentos manuais |
+| created_at | timestamptz | |
+
+Sem policy de UPDATE/DELETE — histórico imutável; uma correção é um novo
+movimento `ajuste`.
+
+### RPCs de Negócios
+
+- `create_sale(...)`: cria `sales` + `sale_items` numa única transação,
+  idempotente via `client_request_id`. Se a venda já nasce num status
+  comprometido (`confirmed`/`paid`/`delivered`), aplica os mesmos efeitos de
+  `update_sale_status` (baixa de estoque com validação de disponibilidade,
+  lançamento de receita) — nunca "esquece" de aplicar por ter sido criada
+  direto nesse status.
+- `update_sale_status(p_sale_id, p_new_status, p_client_request_id)`:
+  transição atômica de status, com `SELECT ... FOR UPDATE` (serializa
+  chamadas concorrentes sobre a mesma venda) + guards
+  (`stock_deducted_at`/`stock_reverted_at`/`revenue_transaction_id`) que
+  garantem que baixa de estoque, estorno e lançamento de receita acontecem
+  no máximo uma vez cada, independente de quantas vezes a RPC for chamada.
+- `apply_sale_status_effects(...)`: função interna compartilhada pelas duas
+  RPCs acima — nunca duplicar a lógica de efeitos colaterais em dois
+  lugares.
+- `get_inventory_levels()`: saldo de estoque calculado por item.
+- `get_business_dashboard_summary(p_period_start, p_period_end,
+  p_business_id)`: todos os indicadores do dashboard empresarial — ver
+  `docs/business-rules.md` > Fase 5 > Definições dos indicadores.
+
+Todas as tabelas desta fase têm RLS habilitado com policies
+`auth.uid() = user_id`, mais triggers de validação de ownership (e, em
+`finance_transactions`, de contexto) para `business_id`/`customer_id`/
+`account_id`/`catalog_item_id`/`sale_id` — nunca só a FK, que só garante
+que a linha referenciada existe, não que pertence ao mesmo usuário.
+
+## Relacionamentos-chave (Fase 0/1/2/3/4/5)
 
 ```
 auth.users (1) — (1) profiles
@@ -757,6 +980,22 @@ finance_accounts (1) — (N) finance_recurrences
 finance_recurrences (1) — (N) finance_transactions
 finance_categories (1) — (N) finance_budgets
 finance_budgets (1) — (N) finance_budget_alerts
+profiles (1) — (N) businesses
+businesses (1) — (N) customers
+customers (1) — (N) customer_interactions
+businesses (1) — (N) catalog_items
+businesses (1) — (N) offers
+offers (1) — (N) offer_items
+catalog_items (1) — (N) offer_items
+businesses (1) — (N) sales
+customers (1) — (N) sales
+finance_accounts (1) — (N) sales
+sales (1) — (N) sale_items
+catalog_items (1) — (N) sale_items
+catalog_items (1) — (1) inventory_settings
+catalog_items (1) — (N) inventory_movements
+sales (1) — (N) inventory_movements
+sales (1) — (0..1) finance_transactions (via revenue_transaction_id)
 ```
 
 ## Notas de simplificação
