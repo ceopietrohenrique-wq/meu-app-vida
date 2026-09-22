@@ -1,12 +1,14 @@
-# Regras de Negócio — Fase 1 (Núcleo de Execução), Fase 2 (Saúde), Fase 3 (Espiritual), Fase 4 (Financeiro) e Fase 5 (Negócios)
+# Regras de Negócio — Fase 1 a Fase 6
 
 > Cobre as regras críticas necessárias para tarefas, hábitos, XP (Fase 1),
 > peso/IMC/água/alimentação/treino (Fase 2), devocional/estudo bíblico/
 > plano de leitura/orações/versículos (Fase 3), contas/transações/
-> categorias/orçamentos/recorrências (Fase 4) e clientes/leads/catálogo/
-> ofertas/vendas/estoque/indicadores empresariais (Fase 5). Toda regra aqui
-> descrita precisa ter teste unitário correspondente antes da fase
-> respectiva ser considerada concluída (gate da fase, ver `roadmap.md`).
+> categorias/orçamentos/recorrências (Fase 4), clientes/leads/catálogo/
+> ofertas/vendas/estoque/indicadores empresariais (Fase 5) e dashboard
+> consolidado/revisão semanal/metas trimestrais/recompensas/conquistas/
+> busca global (Fase 6). Toda regra aqui descrita precisa ter teste unitário
+> correspondente antes da fase respectiva ser considerada concluída (gate
+> da fase, ver `roadmap.md`).
 
 ## 1. XP — regra crítica de idempotência
 
@@ -805,3 +807,141 @@ Conforme `SPEC-ORIGINAL.md` e o gate da Fase 5 (`roadmap.md`):
 - **Reembolso não gera reversão financeira automática** — ver seção 36.
 - **Sem backorder/estoque negativo com override explícito** — estoque
   insuficiente sempre bloqueia a confirmação da venda nesta fase.
+
+## 40. Metas trimestrais — reaproveita `goals`, nunca duplica conceito
+
+- Meta trimestral é uma linha em `goals` com `type = 'trimestral'` — a
+  mesma tabela genérica criada na Fase 1, nunca uma `quarterly_goals` nova.
+- `is_completed` marca conclusão (útil para metas de `kind = 'processo'`,
+  que não têm um valor numérico para comparar). Metas de `kind = 'resultado'`
+  também podem ser marcadas concluídas manualmente — não existe cálculo
+  automático de "bateu a meta", porque `target_value`/`current_value` são
+  livres (ex.: "melhorar minha saúde" não tem uma métrica única).
+- "Metas semanais podem estar ligadas às metas trimestrais": vínculo
+  opcional (`weekly_plans.quarterly_goal_id` e `goals.parent_goal_id` para
+  o caso genérico de meta-filha-de-meta), aditivo — nunca altera o
+  comportamento existente do Planejamento Semanal (Fase 1) quando não
+  usado.
+- **Limitação conhecida**: o Planejamento Semanal (Fase 1) usa
+  `top_priorities` (texto livre), não linhas de `goals` — o vínculo conecta
+  a SEMANA (`weekly_plans`) a uma meta trimestral, mas não cria
+  automaticamente uma meta semanal formal em `goals`. Se o produto
+  precisar de metas semanais completas como linhas de `goals` (não só
+  texto livre), isso é trabalho futuro, não desta fase.
+
+## 41. Revisão semanal — snapshot + reflexão, mesmo padrão do encerramento diário
+
+- `weekly_reviews` segue exatamente o padrão de `daily_reviews` (Fase 1):
+  a linha grava um SNAPSHOT calculado ao vivo no momento de salvar
+  (`get_weekly_review_snapshot`) — nunca uma segunda fonte de verdade
+  divergente dos dados reais de cada domínio — mais as respostas de
+  reflexão em texto livre ("O que funcionou bem?", "O que não funcionou?",
+  "O que posso melhorar?", "Qual minha prioridade na próxima semana?").
+- `UNIQUE(user_id, week_start)` — salvar de novo na mesma semana faz
+  upsert (o snapshot é recalculado na hora do save, então sempre reflete
+  o estado mais atual até aquele momento), nunca cria uma segunda linha.
+- Vendas/lucro no snapshot semanal usam a MESMA definição de
+  `REVENUE_STATUSES` da Fase 5 (`confirmed`/`paid`/`delivered`) — nunca uma
+  segunda definição divergente de "venda válida".
+
+## 42. Recompensas — disponibilidade calculada, resgate nunca subtrai XP
+
+- "Disponível" nunca é uma coluna mutável — é sempre XP total (soma de
+  `xp_events`) `>= xp_cost`, calculado na hora em que a tela carrega. Mesma
+  filosofia de saldo de conta (Fase 4) e estoque (Fase 5): nada
+  denormalizado que possa dessincronizar.
+- Resgatar uma recompensa NUNCA subtrai XP retroativamente — não existe
+  "saldo de XP gasto". XP é sempre soma imutável de `xp_events`; resgatar é
+  só um registro histórico (`reward_redemptions`) de que o usuário escolheu
+  usar aquela recompensa, guardando o XP total NO MOMENTO
+  (`xp_total_at_redemption`) como referência, nunca recalculado depois.
+- `redeem_reward` é uma RPC atômica (soma do XP total + insert do resgate
+  numa única transação), nunca duas chamadas soltas do client.
+
+## 43. Conquistas — condições fixas, desbloqueio idempotente
+
+- 8 conquistas fixas no código (`ACHIEVEMENT_DEFINITIONS`), não uma tabela
+  configurável pelo usuário: primeira tarefa, 10 tarefas, primeiro hábito,
+  7 dias de devocional completo, primeiro treino, primeira venda, meta
+  trimestral concluída, 1.000 XP total.
+- Condições usam contagens/somas simples em SQL — nunca recomputam o
+  algoritmo de streak de `shared/lib/streak.ts` (limitação deliberada:
+  "7 dias de devocional" conta 7 dias completos no total, não
+  necessariamente consecutivos — proporcional ao escopo desta fase).
+- `check_and_unlock_achievements()` é chamada sempre que a página de
+  Progresso carrega (dentro do próprio `listAchievements`) — nunca precisa
+  de um botão manual "verificar conquistas". Idempotente via
+  `UNIQUE(user_id, achievement_key)` + `ON CONFLICT DO NOTHING`: rodar a
+  função múltiplas vezes nunca duplica nem "desdesbloqueia" uma conquista.
+  Uma conquista desbloqueada é permanente — sem policy de UPDATE/DELETE.
+
+## 44. Dashboard consolidado / Analytics — nunca todos os gráficos juntos
+
+- "Não colocar todos os gráficos simultaneamente. Permitir filtros."
+  (CLAUDE.md > Fase 6): a página de Progresso tem (1) um seletor de período
+  fixo (7 dias/30 dias/3 meses/6 meses/1 ano) e (2) um seletor de visão
+  (Geral/Saúde/Espiritual) no card de resumo — só um recorte por vez.
+- `get_progress_summary` calcula contagens brutas (nunca percentuais
+  complexos por hábito — isso já existe como utilitário TS dedicado,
+  `computeCompletionRate`, fora do escopo de uma RPC de agregação genérica)
+  para tarefas, hábitos, treinos, refeições, água, devocional, leitura
+  bíblica e peso.
+- Financeiro e Negócios NUNCA são recalculados numa segunda função — a
+  página de Progresso reaproveita `get_finance_dashboard_summary`
+  (contexto `pessoal`) e `get_business_dashboard_summary` (todos os
+  negócios) diretamente, os mesmos componentes já usados em
+  `/financeiro` e `/negocios`.
+- Tendência de XP (`get_xp_trend`) é uma série diária somada por
+  `created_at::date` — mesmo princípio de "nunca subestimar/superestimar
+  com um único ponto" das tendências já existentes (peso, Fase 2), só que
+  aqui o gráfico é a soma diária real, não uma média móvel (XP diário não
+  tem o mesmo problema de "ruído de medição" que peso tem).
+
+## 45. Busca global — sempre parametrizada, nunca uma query insegura
+
+- Cada entidade pesquisável (tarefas, clientes, notas de estudo bíblico,
+  itens de catálogo) é uma chamada `.ilike()` PARAMETRIZADA e independente
+  ao Supabase — o termo digitado nunca é concatenado em SQL, sempre enviado
+  como parâmetro do query builder (mesmo princípio da seção 18, Fase 3).
+  Todas as chamadas rodam em paralelo (`Promise.all`), nunca uma única
+  query gigante, e cada uma continua protegida por RLS.
+- **Escopo**: `ideias`/`notas`/`projetos` citados na especificação original
+  NÃO existem no produto ainda — as pastas de domínio (`domains/ideas`,
+  `domains/notes`, `domains/projects`) são scaffolds vazios desde a Fase 0,
+  nenhuma fase do roadmap (`CLAUDE.md > FASES`) implementou essas tabelas.
+  Busca global cobre exatamente o que existe: tarefas, clientes/leads,
+  notas de estudo bíblico, catálogo (produtos/serviços). Quando
+  ideias/notas/projetos forem implementados numa fase futura, adicionar a
+  busca correspondente segue o mesmo padrão (uma query `.ilike()`
+  parametrizada a mais no `Promise.all`).
+
+## 46. Navegação — Progresso e Menu (mobile)
+
+Resolve a decisão pendente desde a Fase 0 (CLAUDE.md > NAVEGAÇÃO): a bottom
+nav mobile agora tem as 5 posições reais — Hoje · Planejamento · (+) ·
+Progresso · Menu. "Menu" (`MenuSheet`) agrupa Saúde/Espiritual/Financeiro/
+Negócios/Inbox/Configurações num sheet — os mesmos itens já existentes na
+sidebar de desktop, só reorganizados para caber nas 5 posições do mobile;
+nenhum item perdeu acesso, só mudou de lugar.
+
+## 47. Testes obrigatórios da Fase 6
+
+Conforme `CLAUDE.md` e o gate da Fase 6 (`roadmap.md`):
+
+- Teste de integração: `check_and_unlock_achievements` desbloqueia cada
+  condição corretamente e nunca duplica (idempotente, chamado várias
+  vezes).
+- Teste de integração: `redeem_reward` grava o XP total no momento
+  corretamente, nunca subtrai XP.
+- Teste de integração: `get_weekly_review_snapshot`/`get_progress_summary`/
+  `get_xp_trend` retornam zeros (nunca erro) quando não há dados no
+  período.
+- Teste de integração: usuário A não acessa/edita dados de Progresso do
+  usuário B (RLS), e vínculos (`parent_goal_id`,
+  `weekly_plans.quarterly_goal_id`, `reward_redemptions.reward_id`) não
+  podem apontar para dados de outro usuário (triggers de ownership) — cobre
+  as 5 tabelas novas da fase (`goals` já tinha RLS desde a Fase 1).
+- E2E: criar meta trimestral e concluí-la desbloqueia a conquista
+  correspondente; revisão semanal calcula e salva; criar/resgatar
+  recompensa; busca global encontra e navega até um resultado; bottom nav
+  mobile mostra Progresso real e agrupa o resto em Menu.

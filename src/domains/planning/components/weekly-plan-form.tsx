@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { useQuarterlyGoals } from "@/domains/goals/queries/use-quarterly-goals";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Textarea } from "@/shared/components/ui/textarea";
@@ -37,6 +38,10 @@ export function WeeklyPlanForm({
     existingPlan?.weeklyXpGoal ?? defaultWeeklyXpGoal,
   );
   const [notes, setNotes] = useState(existingPlan?.notes ?? "");
+  const [quarterlyGoalId, setQuarterlyGoalId] = useState(
+    existingPlan?.quarterlyGoalId ?? "",
+  );
+  const { data: quarterlyGoals = [] } = useQuarterlyGoals();
 
   async function handleSave() {
     try {
@@ -44,6 +49,7 @@ export function WeeklyPlanForm({
         topPriorities: priorities.map((p) => p.trim()).filter(Boolean),
         weeklyXpGoal,
         notes: notes.trim() || undefined,
+        quarterlyGoalId: quarterlyGoalId || undefined,
       });
       toast.success("Planejamento da semana salvo.");
     } catch {
@@ -82,6 +88,27 @@ export function WeeklyPlanForm({
           onChange={(e) => setWeeklyXpGoal(Number(e.target.value))}
         />
       </div>
+
+      {quarterlyGoals.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="quarterly-goal" className="text-sm font-medium">
+            Meta trimestral vinculada (opcional)
+          </label>
+          <select
+            id="quarterly-goal"
+            className="border-input h-8 rounded-lg border bg-transparent px-2.5 text-sm"
+            value={quarterlyGoalId}
+            onChange={(e) => setQuarterlyGoalId(e.target.value)}
+          >
+            <option value="">Nenhuma</option>
+            {quarterlyGoals.map((goal) => (
+              <option key={goal.id} value={goal.id}>
+                {goal.title}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       <div className="flex flex-col gap-1.5">
         <label htmlFor="notes" className="text-sm font-medium">

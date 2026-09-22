@@ -7,6 +7,7 @@ export const weeklyPlanSchema = z.object({
   plannedWorkouts: z.coerce.number().int().min(0).max(14).optional(),
   weeklyXpGoal: z.coerce.number().int().min(0).optional(),
   notes: z.string().trim().max(1000).optional(),
+  quarterlyGoalId: z.string().trim().optional(),
 });
 
 export type WeeklyPlanInput = z.output<typeof weeklyPlanSchema>;

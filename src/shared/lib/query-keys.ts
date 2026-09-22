@@ -44,4 +44,12 @@ export const QUERY_KEYS = {
   sales: ["sales"] as const,
   inventoryLevels: ["inventory-levels"] as const,
   businessDashboard: ["business-dashboard"] as const,
+  quarterlyGoals: ["quarterly-goals"] as const,
+  weeklyReview: ["weekly-review"] as const,
+  rewards: ["rewards"] as const,
+  rewardRedemptions: ["reward-redemptions"] as const,
+  achievements: ["achievements"] as const,
+  progressSummary: ["progress-summary"] as const,
+  xpTrend: ["xp-trend"] as const,
+  globalSearch: ["global-search"] as const,
 };

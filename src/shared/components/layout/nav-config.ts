@@ -7,6 +7,7 @@ import {
   Home,
   Inbox,
   Settings,
+  TrendingUp,
   Wallet,
 } from "lucide-react";
 
@@ -15,22 +16,18 @@ export type NavItem = {
   href: string;
   icon: LucideIcon;
   /**
-   * A bottom nav de mobile só tem 5 posições fixas (Hoje · Planejamento ·
-   * (+) · Progresso · Menu — CLAUDE.md > NAVEGAÇÃO). Itens de domínio que
-   * ainda não têm slot próprio nessa lista (ex.: Saúde, antes de existir
-   * "Menu") ficam de fora do bottom nav e continuam acessíveis pela
-   * sidebar de desktop. Default: aparece nos dois.
+   * A bottom nav de mobile tem 5 posições fixas: Hoje · Planejamento · (+) ·
+   * Progresso · Menu (CLAUDE.md > NAVEGAÇÃO). "Progresso" existe desde a
+   * Fase 6 e ocupa o 4º slot de verdade; os itens com
+   * `showInBottomNav: false` (Saúde/Espiritual/Financeiro/Negócios/Inbox/
+   * Configurações) ficam agrupados no 5º slot, "Menu" (ver
+   * `menu-sheet.tsx`) — nunca escondidos, só reorganizados. Default:
+   * aparece direto na bottom nav.
    */
   showInBottomNav?: boolean;
 };
 
-/**
- * Itens de navegação principal. A navegação completa da especificação
- * (Financeiro, Negócios, Progresso) será adicionada aqui, um item por vez,
- * conforme cada domínio for implementado nas próximas fases — nunca expor
- * um item para uma rota que ainda não existe (CLAUDE.md > REGRA SOBRE
- * PLACEHOLDERS).
- */
+/** Ordem = mesma ordem da sidebar de desktop (CLAUDE.md > NAVEGAÇÃO). */
 export const NAV_ITEMS: NavItem[] = [
   { label: "Hoje", href: "/", icon: Home },
   { label: "Planejamento", href: "/planejamento", icon: CalendarRange },
@@ -53,6 +50,12 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Briefcase,
     showInBottomNav: false,
   },
-  { label: "Inbox", href: "/inbox", icon: Inbox },
-  { label: "Configurações", href: "/configuracoes", icon: Settings },
+  { label: "Progresso", href: "/progresso", icon: TrendingUp },
+  { label: "Inbox", href: "/inbox", icon: Inbox, showInBottomNav: false },
+  {
+    label: "Configurações",
+    href: "/configuracoes",
+    icon: Settings,
+    showInBottomNav: false,
+  },
 ];

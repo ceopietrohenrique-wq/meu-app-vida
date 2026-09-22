@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import { SignOutButton } from "@/domains/auth/components/sign-out-button";
 import { NotificationBell } from "@/domains/notifications/components/notification-bell";
+import { GlobalSearchTrigger } from "@/domains/search/components/global-search-trigger";
 
 import { AppSidebar } from "./app-sidebar";
 import { BottomNav } from "./bottom-nav";
@@ -15,7 +16,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <span className="text-sm font-semibold tracking-tight md:hidden">
             Minha Vida
           </span>
-          <div className="hidden md:block" />
+          <GlobalSearchTrigger />
           <div className="flex items-center gap-2">
             <NotificationBell />
             <SignOutButton />

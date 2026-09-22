@@ -1,11 +1,10 @@
-# Modelo de Dados — Fase 0, Fase 1, Fase 2, Fase 3, Fase 4 e Fase 5
+# Modelo de Dados — Fase 0 a Fase 6
 
 > Este documento cobre as tabelas necessárias para a Fase 0 (Fundação),
 > Fase 1 (Núcleo de execução), Fase 2 (Saúde), Fase 3 (Espiritual), Fase 4
-> (Financeiro) e Fase 5 (Negócios). Tabelas de Progresso e Notificações Push
-> serão documentadas nos respectivos `database.md` incrementais (ou seção
-> adicional) quando essas fases começarem. Ver `docs/roadmap.md` para a
-> ordem completa.
+> (Financeiro), Fase 5 (Negócios) e Fase 6 (Progresso). Tabelas de
+> Notificações Push (Fase 7) serão documentadas quando essa fase começar.
+> Ver `docs/roadmap.md` para a ordem completa.
 
 ## Convenções
 
@@ -149,7 +148,9 @@ mutável (ver `business-rules.md`).
 
 Versão mínima necessária para a Fase 1 (metas semanais ligadas ao
 planejamento semanal). Tipos mensal/trimestral/anual completos evoluem nas
-fases seguintes, mas a tabela já nasce genérica.
+fases seguintes, mas a tabela já nasce genérica — a Fase 6 reaproveita esta
+mesma tabela para metas trimestrais (`type = 'trimestral'`) em vez de criar
+`quarterly_goals` nova (ver Fase 6 abaixo).
 
 | coluna | tipo | notas |
 |---|---|---|
@@ -163,6 +164,8 @@ fases seguintes, mas a tabela já nasce genérica.
 | target_value | numeric | nullable |
 | current_value | numeric | nullable, calculado quando possível |
 | life_area_id | uuid FK → life_areas | nullable |
+| is_completed | boolean not null default false | adicionado na Fase 6 |
+| parent_goal_id | uuid FK → goals (self) | adicionado na Fase 6 — meta semanal ligada à trimestral |
 | created_at / updated_at | timestamptz | |
 
 ### `weekly_plans`
@@ -178,6 +181,7 @@ Suporte ao fluxo de Planejamento Semanal.
 | planned_workouts | integer | nullable |
 | weekly_xp_goal | integer | nullable, pode sobrepor `profiles.weekly_xp_goal` só naquela semana |
 | notes | text | nullable |
+| quarterly_goal_id | uuid FK → goals | nullable, adicionado na Fase 6 — "metas semanais podem estar ligadas às metas trimestrais" |
 | created_at / updated_at | timestamptz | |
 
 Constraint: `UNIQUE(user_id, week_start)`.
@@ -937,7 +941,108 @@ Todas as tabelas desta fase têm RLS habilitado com policies
 `account_id`/`catalog_item_id`/`sale_id` — nunca só a FK, que só garante
 que a linha referenciada existe, não que pertence ao mesmo usuário.
 
-## Relacionamentos-chave (Fase 0/1/2/3/4/5)
+## Fase 6 — Progresso
+
+Metas trimestrais reaproveitam `goals`/`weekly_plans` (Fase 1, ver acima) —
+nenhuma tabela nova para isso. Dashboard/Analytics não têm tabela própria:
+são sempre calculados ao vivo (RPCs abaixo) a partir de tabelas já
+existentes de todas as fases anteriores.
+
+### `weekly_reviews`
+
+Mesmo padrão de `daily_reviews` (Fase 1): a linha guarda um snapshot
+calculado no momento de salvar + as respostas de reflexão em texto livre.
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| week_start | date not null | `UNIQUE(user_id, week_start)` |
+| xp_earned | bigint not null default 0 | |
+| tasks_completed / tasks_total | integer not null default 0 | |
+| habits_completed | integer not null default 0 | contagem de `habit_logs` na semana |
+| workouts_completed | integer not null default 0 | |
+| meals_adherent / meals_planned | integer not null default 0 | |
+| water_goal_days | integer not null default 0 | dias com meta de água batida |
+| devotional_days | integer not null default 0 | dias com checklist completo |
+| bible_reading_days | integer not null default 0 | |
+| weight_logs_count | integer not null default 0 | |
+| personal_expenses | numeric not null default 0 | despesas pessoais (Financeiro, contexto `pessoal`) |
+| sales_revenue / sales_profit | numeric not null default 0 | vendas/lucro (Negócios) |
+| leads_count | integer not null default 0 | |
+| what_worked / what_didnt_work / improvement / next_week_priority | text | nullable — respostas de reflexão |
+| created_at / updated_at | timestamptz | |
+
+### `rewards` / `reward_redemptions`
+
+"Disponível" nunca é uma coluna mutável — é sempre XP total (soma de
+`xp_events`) `>= xp_cost`, calculado na hora. Resgatar nunca subtrai XP
+retroativamente (XP nunca é negativo/punitivo).
+
+`rewards`:
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| name | text not null | |
+| description | text | nullable |
+| xp_cost | integer not null | `> 0` |
+| is_active | boolean not null default true | |
+| created_at / updated_at | timestamptz | |
+
+`reward_redemptions` (histórico imutável, sem UPDATE/DELETE):
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| reward_id | uuid FK → rewards | |
+| xp_total_at_redemption | bigint not null | snapshot do XP total no momento — nunca recalculado depois |
+| notes | text | nullable |
+| redeemed_at | timestamptz not null default now() | |
+
+### `user_achievements`
+
+Conquistas são definições FIXAS no código (`ACHIEVEMENT_DEFINITIONS`,
+`src/domains/xp/types/achievement.ts`), não uma tabela configurável.
+Histórico imutável (sem UPDATE/DELETE) — uma conquista nunca é perdida.
+
+| coluna | tipo | notas |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| achievement_key | text not null | uma das 8 chaves fixas (check no banco) |
+| unlocked_at | timestamptz not null default now() | |
+
+`UNIQUE(user_id, achievement_key)` — desbloqueio idempotente via
+`check_and_unlock_achievements()`.
+
+### RPCs de Progresso
+
+- `get_weekly_review_snapshot(p_week_start)`: calcula o snapshot da semana
+  ao vivo (mesmo padrão de `get_daily_review_snapshot`).
+- `redeem_reward(p_reward_id, p_notes)`: registra o resgate com o XP total
+  no momento, atômico (uma única RPC).
+- `check_and_unlock_achievements()`: reavalia as 8 condições e desbloqueia
+  as que ainda não foram desbloqueadas (idempotente via
+  `UNIQUE(user_id, achievement_key)` + `ON CONFLICT DO NOTHING`); retorna só
+  as desbloqueadas NESTA chamada.
+- `get_progress_summary(p_period_start, p_period_end)`: contagens brutas
+  entre domínios para o Dashboard/Analytics (tarefas, hábitos, treinos,
+  refeições, água, devocional, leitura bíblica, peso). Financeiro/Negócios
+  não são recalculados aqui — a página reaproveita
+  `get_finance_dashboard_summary`/`get_business_dashboard_summary`
+  diretamente.
+- `get_xp_trend(p_period_start, p_period_end)`: série diária de XP para o
+  gráfico de tendência.
+
+Todas as tabelas desta fase têm RLS habilitado com policies
+`auth.uid() = user_id`, mais triggers de validação de ownership para
+`parent_goal_id` (self-FK em `goals`), `weekly_plans.quarterly_goal_id` e
+`reward_redemptions.reward_id`.
+
+## Relacionamentos-chave (Fase 0/1/2/3/4/5/6)
 
 ```
 auth.users (1) — (1) profiles
@@ -996,6 +1101,12 @@ catalog_items (1) — (1) inventory_settings
 catalog_items (1) — (N) inventory_movements
 sales (1) — (N) inventory_movements
 sales (1) — (0..1) finance_transactions (via revenue_transaction_id)
+goals (1) — (N) goals (self, via parent_goal_id)
+goals (1) — (N) weekly_plans (via quarterly_goal_id)
+profiles (1) — (N) weekly_reviews
+profiles (1) — (N) rewards
+rewards (1) — (N) reward_redemptions
+profiles (1) — (N) user_achievements
 ```
 
 ## Notas de simplificação

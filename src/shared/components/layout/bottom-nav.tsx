@@ -1,19 +1,20 @@
 import { QuickCaptureButton } from "@/shared/components/quick-capture/quick-capture-button";
 
+import { MenuSheet } from "./menu-sheet";
 import { NAV_ITEMS } from "./nav-config";
 import { NavLink } from "./nav-link";
 
 /**
- * Navegação inferior de mobile (abaixo de md). A especificação prevê 5
- * posições (Hoje · Planejamento · (+) · Progresso · Menu); Progresso e Menu
- * ainda não existem como telas próprias, então os slots 4 e 5 usam Inbox e
- * Configurações — as únicas rotas reais equivalentes até aqui.
+ * Navegação inferior de mobile (abaixo de md): Hoje · Planejamento · (+) ·
+ * Progresso · Menu (CLAUDE.md > NAVEGAÇÃO) — as 5 posições agora são todas
+ * reais (Progresso existe desde a Fase 6; Menu agrupa o resto via
+ * `MenuSheet`).
  */
 export function BottomNav() {
   const bottomNavItems = NAV_ITEMS.filter(
     (item) => item.showInBottomNav !== false,
   );
-  const [first, second, ...rest] = bottomNavItems;
+  const [first, second, third] = bottomNavItems;
 
   return (
     <nav
@@ -39,17 +40,19 @@ export function BottomNav() {
         <QuickCaptureButton />
       </div>
 
-      {rest.map((item) => (
+      {third && (
         <NavLink
-          key={item.href}
-          href={item.href}
-          label={item.label}
-          icon={<item.icon className="size-5" aria-hidden="true" />}
+          key={third.href}
+          href={third.href}
+          label={third.label}
+          icon={<third.icon className="size-5" aria-hidden="true" />}
           className="flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-medium [&>span]:leading-none"
           activeClassName="text-primary"
           inactiveClassName="text-muted-foreground"
         />
-      ))}
+      )}
+
+      <MenuSheet />
     </nav>
   );
 }

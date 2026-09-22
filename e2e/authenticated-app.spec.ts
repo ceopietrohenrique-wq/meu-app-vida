@@ -43,6 +43,7 @@ test.afterAll(async () => {
 
 test("login, navegação pelo shell protegido, edição de perfil e logout", async ({
   page,
+  isMobile,
 }) => {
   await page.goto("/login");
   await page.getByLabel("E-mail").fill(email);
@@ -54,11 +55,14 @@ test("login, navegação pelo shell protegido, edição de perfil e logout", asy
     page.getByRole("heading", { name: "Olá, Usuário E2E" }),
   ).toBeVisible();
 
-  // Navegação principal (sidebar no desktop, bottom nav no mobile) leva a
-  // Configurações sem recarregar a proteção de rota. Sidebar e bottom nav
-  // convivem no DOM (uma delas fica oculta via CSS conforme o viewport), por
-  // isso filtramos pela que está de fato visível no projeto em execução.
-  await page.locator("a:visible", { hasText: "Configurações" }).first().click();
+  // Navegação principal leva a Configurações sem recarregar a proteção de
+  // rota. No desktop, o link já está na sidebar; no mobile (desde a Fase 6),
+  // Configurações mora dentro do sheet "Menu" (5º slot da bottom nav —
+  // CLAUDE.md > NAVEGAÇÃO), então precisa abrir o sheet primeiro.
+  if (isMobile) {
+    await page.getByRole("button", { name: "Menu" }).click();
+  }
+  await page.getByRole("link", { name: "Configurações" }).click();
   await expect(page).toHaveURL("/configuracoes");
 
   const nameInput = page.getByLabel("Nome");

@@ -36,6 +36,7 @@ export async function saveWeeklyPlan(
         planned_workouts: input.plannedWorkouts ?? null,
         weekly_xp_goal: input.weeklyXpGoal ?? null,
         notes: input.notes || null,
+        quarterly_goal_id: input.quarterlyGoalId || null,
       },
       { onConflict: "user_id,week_start" },
     )

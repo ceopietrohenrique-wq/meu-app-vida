@@ -5,6 +5,8 @@ export type WeeklyPlan = {
   plannedWorkouts: number | null;
   weeklyXpGoal: number | null;
   notes: string | null;
+  /** Meta trimestral vinculada (opcional) — ver Fase 6 > Metas trimestrais. */
+  quarterlyGoalId: string | null;
 };
 
 export type WeeklyPlanRow = {
@@ -14,6 +16,7 @@ export type WeeklyPlanRow = {
   planned_workouts: number | null;
   weekly_xp_goal: number | null;
   notes: string | null;
+  quarterly_goal_id: string | null;
 };
 
 export function mapWeeklyPlanRow(row: WeeklyPlanRow): WeeklyPlan {
@@ -24,5 +27,6 @@ export function mapWeeklyPlanRow(row: WeeklyPlanRow): WeeklyPlan {
     plannedWorkouts: row.planned_workouts,
     weeklyXpGoal: row.weekly_xp_goal,
     notes: row.notes,
+    quarterlyGoalId: row.quarterly_goal_id,
   };
 }

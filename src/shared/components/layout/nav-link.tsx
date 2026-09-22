@@ -13,6 +13,7 @@ export function NavLink({
   className,
   activeClassName,
   inactiveClassName,
+  onNavigate,
 }: {
   href: string;
   label: string;
@@ -25,6 +26,8 @@ export function NavLink({
   className?: string;
   activeClassName: string;
   inactiveClassName: string;
+  /** Chamado ao clicar — usado pelo MenuSheet para fechar o sheet ao navegar. */
+  onNavigate?: () => void;
 }) {
   const pathname = usePathname();
   const isActive = pathname === href;
@@ -34,6 +37,7 @@ export function NavLink({
       href={href}
       className={cn(className, isActive ? activeClassName : inactiveClassName)}
       aria-current={isActive ? "page" : undefined}
+      onClick={onNavigate}
     >
       {icon}
       <span>{label}</span>
