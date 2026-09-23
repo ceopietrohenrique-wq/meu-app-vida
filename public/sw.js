@@ -1,9 +1,37 @@
-// Service worker mínimo da Fase 0: app shell + página offline + cache de
-// assets estáticos. Sem Web Push ainda (chega na Fase 7) e sem cachear
-// nenhuma resposta que possa conter dado privado do usuário.
-const CACHE_NAME = "app-shell-v1";
+// Service worker do app shell (Fase 0) + Web Push (Fase 7) + offline shell
+// refinado (Fase 8). Ver docs/business-rules.md > Fase 8 > Service worker
+// para a estratégia de cache completa e o racional de cada regra.
+//
+// ESTRATÉGIA DE CACHE (resumo — nunca mude sem atualizar a doc):
+//   - Navegação (HTML de página): network-first, cai para /offline.html se
+//     a rede falhar. Nunca cacheia o HTML das páginas em si — são todas
+//     dinâmicas/autenticadas (ƒ no build do Next.js), cachear a resposta
+//     arriscaria mostrar dado de um usuário para outro no mesmo browser.
+//   - `/_next/static/*` (JS/CSS com hash no nome, imutável por definição):
+//     stale-while-revalidate — serve do cache na hora, atualiza em
+//     background. Seguro porque o nome do arquivo muda a cada build.
+//   - Ícones do manifest (`/icons/*`) e o próprio manifest: cache-first com
+//     fallback de rede — são assets públicos, iguais para todo usuário,
+//     raramente mudam, e são o que garante o ícone aparecer mesmo offline.
+//   - Chamadas de outra origem (Supabase — API REST, Auth, Storage): NUNCA
+//     interceptadas. Nunca cacheadas. Garante que nenhum dado privado do
+//     usuário fica em cache do service worker.
+//   - Qualquer request que não seja GET: nunca interceptado (mutations
+//     sempre vão direto pra rede — cachear POST/PUT/DELETE não faz
+//     sentido e poderia mascarar falha real de escrita).
+//
+// CACHE_NAME muda a cada mudança de estratégia — `activate` já limpa
+// qualquer cache com nome antigo, então trocar a versão aqui é a forma
+// correta de invalidar o que os usuários já instalaram (nunca editar o
+// conteúdo de um cache existente in-place).
+const CACHE_NAME = "app-shell-v2";
 const OFFLINE_URL = "/offline.html";
-const PRECACHE_URLS = [OFFLINE_URL];
+const PRECACHE_URLS = [
+  OFFLINE_URL,
+  "/manifest.webmanifest",
+  "/icons/icon-192",
+  "/icons/icon-512",
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -18,7 +46,9 @@ self.addEventListener("activate", (event) => {
       .keys()
       .then((keys) =>
         Promise.all(
-          keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)),
+          keys
+            .filter((key) => key !== CACHE_NAME)
+            .map((key) => caches.delete(key)),
         ),
       ),
   );
@@ -35,9 +65,7 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
 
   if (request.mode === "navigate") {
-    event.respondWith(
-      fetch(request).catch(() => caches.match(OFFLINE_URL)),
-    );
+    event.respondWith(fetch(request).catch(() => caches.match(OFFLINE_URL)));
     return;
   }
 
@@ -52,6 +80,22 @@ self.addEventListener("fetch", (event) => {
           })
           .catch(() => cached);
         return cached ?? networkFetch;
+      }),
+    );
+    return;
+  }
+
+  if (
+    url.pathname.startsWith("/icons/") ||
+    url.pathname === "/manifest.webmanifest"
+  ) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then(async (cache) => {
+        const cached = await cache.match(request);
+        if (cached) return cached;
+        const response = await fetch(request);
+        cache.put(request, response.clone());
+        return response;
       }),
     );
   }

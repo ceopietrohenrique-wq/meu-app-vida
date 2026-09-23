@@ -49,3 +49,6 @@ next-env.d.ts
 # supabase local
 /supabase/.branches
 /supabase/.temp
+
+# lighthouse (relatórios locais gerados por scripts/lighthouse.mjs)
+lighthouse-*.json

@@ -41,6 +41,11 @@ export const viewport: Viewport = {
   ],
   width: "device-width",
   initialScale: 1,
+  // Fase 8 > Splash/Apple: sem isso o conteúdo nunca alcança a área atrás
+  // do notch/Dynamic Island/home indicator em iPhones — os componentes que
+  // precisam respeitar essa área usam `env(safe-area-inset-*)` (já em uso
+  // em bottom-nav.tsx desde a Fase 6/7; ver docs/business-rules.md > Fase 8).
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

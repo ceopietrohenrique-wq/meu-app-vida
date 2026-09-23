@@ -41,8 +41,13 @@ export function AchievementsCard() {
               return (
                 <li
                   key={key}
+                  // Fase 8 > Acessibilidade: opacity-40 no texto derrubava
+                  // o contraste pra 2.71:1 (abaixo do 4.5:1 do WCAG AA) —
+                  // achado real via axe-core. grayscale + fundo diferenciado
+                  // já comunica "bloqueada" sem depender só de opacidade no
+                  // texto (nem só de cor, que também é regra de Fase 8).
                   className={`rounded-md border px-2.5 py-2 text-center ${
-                    unlocked ? "" : "opacity-40 grayscale"
+                    unlocked ? "" : "bg-muted/50 grayscale"
                   }`}
                 >
                   <p className="text-xs font-medium">{def.title}</p>

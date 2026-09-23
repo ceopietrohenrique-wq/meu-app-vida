@@ -76,7 +76,14 @@ export function GlobalSearchCommand({
                       <div className="flex flex-col">
                         <span>{item.title}</span>
                         {item.subtitle && (
-                          <span className="text-muted-foreground text-xs">
+                          // Fase 8 > Acessibilidade: no estado destacado
+                          // (data-selected, fundo mais claro) o
+                          // text-muted-foreground fixo caía pra 4.34:1
+                          // (abaixo de 4.5:1) — segue o mesmo padrão de
+                          // variante de grupo já usado em CommandItem
+                          // (shared/components/ui/command.tsx) para virar
+                          // text-foreground junto com o item.
+                          <span className="text-muted-foreground group-data-selected/command-item:text-foreground text-xs">
                             {item.subtitle}
                           </span>
                         )}

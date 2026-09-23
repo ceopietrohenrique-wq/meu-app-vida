@@ -1,6 +1,7 @@
 "use client";
 
 import { TrendingDown, TrendingUp } from "lucide-react";
+import dynamic from "next/dynamic";
 
 import {
   Card,
@@ -16,7 +17,15 @@ import { useWeightLogs } from "../queries/use-weight-logs";
 import { computeWeightTrend } from "../utils/weight-trend";
 import { LogWeightDialog } from "./log-weight-dialog";
 import { WeightGoalDialog } from "./weight-goal-dialog";
-import { WeightTrendChart } from "./weight-trend-chart";
+
+// Fase 8 > Performance: Recharts é uma dependência pesada só usada aqui —
+// carregada sob demanda (nunca no bundle inicial da rota) e nunca no
+// server (o gráfico não tem nada a ganhar de SSR, e Recharts depende de
+// medir o DOM no client).
+const WeightTrendChart = dynamic(
+  () => import("./weight-trend-chart").then((mod) => mod.WeightTrendChart),
+  { ssr: false, loading: () => <Skeleton className="h-40 w-full" /> },
+);
 
 const TREND_LABEL: Record<string, string> = {
   subindo: "Subindo",

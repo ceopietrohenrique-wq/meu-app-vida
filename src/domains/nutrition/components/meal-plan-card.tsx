@@ -51,6 +51,7 @@ export function MealPlanCard({ today }: { today: string }) {
                   {format(parseISO(day.date), "EEEEE", { locale: ptBR })}
                 </span>
                 <div
+                  role="img"
                   className={cn(
                     "size-5 rounded-full border",
                     day.completed

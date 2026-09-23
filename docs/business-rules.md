@@ -1,4 +1,4 @@
-# Regras de Negócio — Fase 1 a Fase 7
+# Regras de Negócio — Fase 1 a Fase 8
 
 > Cobre as regras críticas necessárias para tarefas, hábitos, XP (Fase 1),
 > peso/IMC/água/alimentação/treino (Fase 2), devocional/estudo bíblico/
@@ -6,9 +6,11 @@
 > categorias/orçamentos/recorrências (Fase 4), clientes/leads/catálogo/
 > ofertas/vendas/estoque/indicadores empresariais (Fase 5), dashboard
 > consolidado/revisão semanal/metas trimestrais/recompensas/conquistas/
-> busca global (Fase 6) e notificações push/preferências/quiet
-> hours/jobs agendados/resumo diário/resumo semanal (Fase 7). Toda regra
-> aqui descrita precisa ter teste unitário correspondente antes da fase
+> busca global (Fase 6), notificações push/preferências/quiet
+> hours/jobs agendados/resumo diário/resumo semanal (Fase 7) e
+> instalabilidade/ícones/offline shell/service worker/acessibilidade/
+> performance/Lighthouse (Fase 8 — última do roadmap). Toda regra aqui
+> descrita precisa ter teste unitário correspondente antes da fase
 > respectiva ser considerada concluída (gate da fase, ver `roadmap.md`).
 
 ## 1. XP — regra crítica de idempotência
@@ -1244,3 +1246,169 @@ exclusivo do workflow — o resto da Fase 7 segue pendente de aprovação) —
 como `schedule:` já está no branch default, a execução automática a cada
 15 minutos passa a valer a partir da próxima janela do GitHub Actions,
 sem nenhuma ação adicional.
+
+## 62. Manifest e instalabilidade (Fase 8)
+
+- `src/app/manifest.ts` já existia desde a Fase 0 com os 7 campos
+  obrigatórios (name/short_name/start_url/display/icons/theme_color/
+  background_color) — a Fase 8 não recriou nada, só adicionou a entrada de
+  ícone `purpose: "maskable"` (reaproveitando o ícone de 512 já existente,
+  cujo glifo centralizado já respeita a "safe zone" de 80% que o SO usa ao
+  recortar — nenhum ícone novo precisou ser gerado).
+- `start_url: "/"` sempre existe (Tela Hoje, redireciona para `/login`
+  sem sessão) — nunca uma rota que pode não existir.
+- Ícones são rotas dinâmicas (`next/og`, `src/app/icons/*/route.tsx`), não
+  arquivos estáticos — sempre existem enquanto o build existir, nunca um
+  arquivo binário que pode ficar dessincronizado do código.
+- `InstallAppButton` (`shared/components/pwa/install-app-button.tsx`) só
+  renderiza algo quando `beforeinstallprompt` dispara de verdade — nunca um
+  botão que promete instalação sem o browser confirmar que é possível. No
+  iOS/Safari esse evento nunca existe (limitação documentada da Apple, não
+  um bug) — lá a instalação é manual via "Adicionar à Tela de Início".
+
+## 63. Safe areas e viewport (Fase 8)
+
+- `viewport.viewportFit = "cover"` (adicionado nesta fase) permite o
+  conteúdo estender até embaixo do notch/Dynamic Island em iPhones — sem
+  isso, uma PWA instalada em modo standalone perde a franja de tela em
+  volta do notch (barra preta), o que é visualmente pior, não melhor.
+- Habilitar `viewport-fit: cover` exige compensar com
+  `env(safe-area-inset-*)` em todo elemento que fica colado nas bordas —
+  `bottom-nav.tsx` já tinha isso desde a Fase 6/7; o header do
+  `app-shell.tsx` ganhou `padding-top: max(0.75rem, env(safe-area-inset-top))`
+  nesta fase para não ficar embaixo da status bar/Dynamic Island.
+
+## 64. Offline shell e cache do service worker (Fase 8)
+
+- `CACHE_NAME` virou `app-shell-v2` (era `app-shell-v1` desde a Fase 0) —
+  toda mudança de estratégia de cache exige trocar a versão; `activate` já
+  limpa qualquer cache com nome diferente do atual desde a Fase 0, então
+  trocar a versão é o mecanismo real de invalidação (nunca editar um cache
+  existente in-place).
+- Estratégia de cache, por tipo de request (documentada também no topo de
+  `public/sw.js`):
+  - **Navegação (HTML de página)**: network-first, cai para
+    `/offline.html` se a rede falhar. Nunca cacheia o HTML de uma página em
+    si — todas são dinâmicas/autenticadas (`ƒ` no build), cachear
+    arriscaria vazar dado de um usuário para outro no mesmo browser/
+    dispositivo compartilhado.
+  - **`/_next/static/*`** (JS/CSS com hash no nome, imutável por
+    definição): stale-while-revalidate.
+  - **Ícones do manifest + o manifest em si** (novo nesta fase): cache-first
+    com fallback de rede — assets públicos, iguais pra todo usuário, é o
+    que garante o ícone aparecer mesmo com o app aberto offline.
+  - **Qualquer origem que não seja a própria** (Supabase REST/Auth/Storage):
+    NUNCA interceptado — dado privado do usuário nunca entra em cache do
+    service worker.
+  - **Qualquer request que não seja GET**: nunca interceptado — mutation
+    sempre vai direto pra rede.
+- Push/`notificationclick` (Fase 7) preservados sem nenhuma alteração —
+  confirmado por teste estático
+  (`src/shared/lib/service-worker-content.test.ts`) que lê `public/sw.js`
+  e garante que os dois listeners continuam presentes a cada mudança futura
+  no arquivo.
+
+## 65. Acessibilidade — achados reais da auditoria (Fase 8)
+
+Varredura automatizada (axe-core, `e2e/fase8-a11y.spec.ts`) contra o build
+de produção encontrou 5 problemas reais, todos corrigidos:
+
+1. **Contraste do atalho `⌘K`** (`global-search-trigger.tsx`): o header é
+   compartilhado por TODA página autenticada, então esse achado sozinho
+   derrubava a varredura inteira. `text-muted-foreground/70` caía para
+   2.71:1 (WCAG AA exige 4.5:1 para texto pequeno) — trocado para
+   `text-foreground`.
+2. **`aria-label` em `<div>` sem role** (`meal-plan-card.tsx`, tira de dias
+   com/sem refeição): `aria-label` não é válido em elemento sem role
+   semântico — adicionado `role="img"` (o elemento é puramente visual,
+   igual um ícone de status).
+3. **`Progress` sem nome acessível** (`xp-header.tsx`,
+   `budgets-card.tsx`): barra de progresso ARIA (`role="progressbar"`
+   implícito do componente) precisa de `aria-label` descrevendo o que está
+   medindo — adicionado em ambos.
+4. **Contraste de texto em item bloqueado** (`achievements-card.tsx`):
+   `opacity-40` aplicado ao `<li>` inteiro (não só a um ícone) derrubava o
+   contraste do texto de descrição — trocado por `bg-muted/50` (fundo
+   diferenciado) + `grayscale`, sem tocar a opacidade do texto.
+5. **Contraste do subtítulo de resultado destacado na busca global**
+   (`global-search-command.tsx`): `text-muted-foreground` fixo não
+   acompanhava a mudança de fundo do item quando destacado
+   (`data-selected:bg-muted`), caindo pra 4.34:1 — corrigido com a mesma
+   variante de grupo (`group-data-selected/command-item:text-foreground`)
+   que o resto do `CommandItem` já usa.
+
+Limitação conhecida e documentada, não corrigida: o `CommandList` da
+biblioteca `cmdk` (usada pela Busca Global) fixa `role="listbox"`
+internamente; no estado transitório "digite ao menos 2 letras" (antes de
+qualquer busca), a lista fica sem filhos `role="option"`/`"group"`, o que o
+axe sinaliza como violação `critical` (`aria-required-children`). É
+comportamento hardcoded da própria lib `cmdk` (confirmado lendo o pacote
+publicado), reproduzido em qualquer app que a usa sem fork — o teste audita
+o estado real e interativo (com resultados, que tem os `role="option"`
+corretos), não esse estado vazio transitório.
+
+## 66. Performance (Fase 8)
+
+- Recharts (`XpTrendChart`, `WeightTrendChart`) e o `cmdk` da Busca Global
+  agora carregam via `next/dynamic({ ssr: false })` — nunca no bundle
+  inicial de cada rota. A Busca Global também só monta o componente depois
+  do primeiro Cmd/Ctrl+K ou clique (`hasOpenedOnce`), não ao montar o
+  header (que aparece em toda página).
+- Lighthouse (ambiente documentado na seção seguinte) confirma que a Tela
+  Hoje (autenticada, muitas queries client-side em paralelo) tem LCP alto
+  (~6s sob o throttling simulado padrão do Lighthouse) — atribuído à
+  natureza client-rendered de um dashboard pessoal totalmente autenticado
+  (não dá pra prerenderizar estaticamente dado específico do usuário).
+  Resolver isso de verdade exigiria mover parte do data-fetching inicial
+  para Server Components com prefetch — mudança arquitetural real, maior
+  que o escopo de "Refinamento PWA", registrada aqui como limitação
+  conhecida para uma fase futura, não escondida.
+
+## 67. Lighthouse (Fase 8)
+
+- **Ambiente**: build de produção real (`npm run build && npm run start`),
+  Chromium do Playwright (`ms-playwright/chromium-*`), script
+  `scripts/lighthouse.mjs` (`npm run lighthouse` / `npm run lighthouse:auth`).
+  Throttling simulado padrão do Lighthouse (mobile, 4x CPU slowdown, rede
+  lenta) — não é uma medição de rede real, é a metodologia padrão da
+  ferramenta.
+- **Categoria "PWA" não existe mais nesta versão do Lighthouse** (13.5.0) —
+  removida/reestruturada upstream (CLAUDE.md/Fase 8 já previa esse caso:
+  "quando a versão da ferramenta expuser essa categoria"). Instalabilidade
+  é garantida pelos próprios testes de manifest/ícones
+  (`src/app/manifest.test.ts`, `e2e/fase8-pwa.spec.ts`), não por um score
+  desta categoria que não existe mais.
+- **Scores obtidos** (produção, ver ambiente acima):
+
+  | Página | Performance | Accessibility | Best Practices |
+  |---|---|---|---|
+  | `/login` (pública) | ~89-91 | 98 | 100 |
+  | `/` Hoje (autenticada) | ~70-72 | 100 | 96 |
+  | `/progresso` (autenticada, Recharts) | 86 | 100 | 100 |
+
+- Nenhuma funcionalidade foi escondida/desabilitada para inflar score —
+  todos os números acima são do app completo, com push/notificações/
+  dashboards reais carregando. Performance da Tela Hoje é a limitação
+  conhecida documentada na seção 66.
+
+## 68. Testes obrigatórios da Fase 8
+
+- Unitário: `src/app/manifest.test.ts` (campos obrigatórios, ícones
+  192/512/maskable, nenhum ícone com src/sizes/type vazio).
+- Unitário: `src/shared/lib/service-worker-content.test.ts` (guarda
+  estática — push/notificationclick/install/activate/fetch continuam
+  presentes, cache versionado, cleanup de cache antigo, nunca intercepta
+  outra origem nem métodos não-GET).
+- E2E (`e2e/fase8-pwa.spec.ts`): manifest servido com ícones reais (200 +
+  `image/png`); service worker registra e ativa; offline mostra
+  `/offline.html` real (nunca tela branca); cache é versionado
+  (`app-shell-v\d+`); capability detection não quebra `/configuracoes`;
+  mobile 375/390/430px sem overflow horizontal (Hoje + dialog de Quick
+  Capture); desktop mostra sidebar (não bottom nav) e conteúdo com largura
+  máxima (nunca esticado).
+- E2E de acessibilidade (`e2e/fase8-a11y.spec.ts`): 8 páginas principais +
+  Quick Capture + Busca Global sem violação `critical`/`serious`; foco
+  entra no dialog ao abrir e o dialog fecha com Escape.
+- Regressão: suíte completa de `e2e/fase7.spec.ts` (push/subscriptions/
+  preferências) re-executada sem nenhuma alteração de código de push —
+  confirma que o refinamento de cache/offline não quebrou nada da Fase 7.

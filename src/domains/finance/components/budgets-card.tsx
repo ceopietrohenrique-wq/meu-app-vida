@@ -104,7 +104,10 @@ export function BudgetsCard({
                         : `${progress.percent.toFixed(0)}%`}
                     </span>
                   </div>
-                  <Progress value={clampedPercent} />
+                  <Progress
+                    value={clampedPercent}
+                    aria-label={`Orçamento de ${categoryName(budget.categoryId)}: ${clampedPercent.toFixed(0)}% utilizado`}
+                  />
                 </li>
               );
             })}

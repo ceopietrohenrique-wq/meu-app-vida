@@ -1,6 +1,7 @@
 "use client";
 
 import { addDays, format } from "date-fns";
+import dynamic from "next/dynamic";
 import { useState } from "react";
 
 import { BusinessDashboardCard } from "@/domains/business/components/business-dashboard-card";
@@ -12,7 +13,6 @@ import {
   type ProgressPeriodKey,
 } from "@/domains/progress/components/progress-period-selector";
 import { ProgressSummaryCard } from "@/domains/progress/components/progress-summary-card";
-import { XpTrendChart } from "@/domains/progress/components/xp-trend-chart";
 import { WeeklyReviewDialog } from "@/domains/reviews/components/weekly-review-dialog";
 import { useProfile } from "@/domains/settings/queries/use-profile";
 import { AchievementsCard } from "@/domains/xp/components/achievements-card";
@@ -23,6 +23,16 @@ import {
   todayLocalDateString,
 } from "@/shared/lib/date/local-date";
 import { getWeekStartDate } from "@/shared/lib/date/week";
+
+// Fase 8 > Performance: Recharts carregado sob demanda, nunca no bundle
+// inicial nem no server (mesmo racional de weight-card.tsx).
+const XpTrendChart = dynamic(
+  () =>
+    import("@/domains/progress/components/xp-trend-chart").then(
+      (mod) => mod.XpTrendChart,
+    ),
+  { ssr: false, loading: () => <Skeleton className="h-64 w-full" /> },
+);
 
 export default function ProgressPage() {
   const { data: profile, isLoading } = useProfile();

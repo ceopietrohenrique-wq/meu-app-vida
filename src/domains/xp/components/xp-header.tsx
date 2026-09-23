@@ -28,7 +28,10 @@ export function XpHeader() {
           {summary.weeklyXp} / {summary.weeklyGoal} XP
         </span>
       </div>
-      <Progress value={percent} />
+      <Progress
+        value={percent}
+        aria-label={`Meta semanal de XP: ${summary.weeklyXp} de ${summary.weeklyGoal}, ${percent}%`}
+      />
       <span className="text-muted-foreground text-xs">
         {percent}% da meta semanal
       </span>
