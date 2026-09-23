@@ -56,3 +56,52 @@ self.addEventListener("fetch", (event) => {
     );
   }
 });
+
+// Fase 7 — Web Push. O payload é sempre JSON assinado/enviado pela Edge
+// Function de envio (supabase/functions/send-push), nunca lido de outra
+// fonte. Falha de parse não pode quebrar o listener — mostra um fallback
+// genérico em vez de não mostrar nada.
+self.addEventListener("push", (event) => {
+  let payload = { title: "Nova notificação", body: "", url: "/" };
+  try {
+    if (event.data) payload = { ...payload, ...event.data.json() };
+  } catch {
+    // payload não era JSON válido — mantém o fallback.
+  }
+
+  const options = {
+    body: payload.body,
+    // Mesmo ícone gerado dinamicamente do manifest (src/app/icons/icon-192)
+    // — nunca um asset estático paralelo para o mesmo ícone.
+    icon: "/icons/icon-192",
+    badge: "/icons/icon-192",
+    data: { url: payload.url || "/" },
+    tag: payload.tag,
+  };
+
+  event.waitUntil(self.registration.showNotification(payload.title, options));
+});
+
+// Clique na notificação: foca uma janela já aberta na mesma origem quando
+// existir, em vez de sempre abrir uma nova aba — e navega para a URL de
+// destino nela. Só abre uma nova janela quando nenhuma está aberta.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = event.notification.data?.url || "/";
+
+  event.waitUntil(
+    self.clients
+      .matchAll({ type: "window", includeUncontrolled: true })
+      .then((clientsList) => {
+        for (const client of clientsList) {
+          if (client.url.startsWith(self.location.origin) && "focus" in client) {
+            client.postMessage({ type: "notification-click", url: targetUrl });
+            return client.focus().then(() => {
+              if ("navigate" in client) return client.navigate(targetUrl);
+            });
+          }
+        }
+        return self.clients.openWindow(targetUrl);
+      }),
+  );
+});

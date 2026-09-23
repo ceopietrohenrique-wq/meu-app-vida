@@ -29,6 +29,10 @@ const eslintConfig = defineConfig([
     "src/shared/components/ui/**",
     "playwright-report/**",
     "coverage/**",
+    // Deno runtime (Supabase Edge Functions) — npm:/Deno globals não
+    // existem no toolchain Node/Next.js; lint próprio é responsabilidade
+    // do `deno lint` no deploy, não deste eslint.
+    "supabase/functions/**",
   ]),
 ]);
 

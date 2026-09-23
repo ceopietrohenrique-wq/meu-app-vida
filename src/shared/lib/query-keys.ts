@@ -52,4 +52,6 @@ export const QUERY_KEYS = {
   progressSummary: ["progress-summary"] as const,
   xpTrend: ["xp-trend"] as const,
   globalSearch: ["global-search"] as const,
+  notificationPreferences: ["notification-preferences"] as const,
+  pushSubscriptionStatus: ["push-subscription-status"] as const,
 };

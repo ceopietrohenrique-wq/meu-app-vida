@@ -1,10 +1,9 @@
-# Modelo de Dados — Fase 0 a Fase 6
+# Modelo de Dados — Fase 0 a Fase 7
 
 > Este documento cobre as tabelas necessárias para a Fase 0 (Fundação),
 > Fase 1 (Núcleo de execução), Fase 2 (Saúde), Fase 3 (Espiritual), Fase 4
-> (Financeiro), Fase 5 (Negócios) e Fase 6 (Progresso). Tabelas de
-> Notificações Push (Fase 7) serão documentadas quando essa fase começar.
-> Ver `docs/roadmap.md` para a ordem completa.
+> (Financeiro), Fase 5 (Negócios), Fase 6 (Progresso) e Fase 7
+> (Notificações Push). Ver `docs/roadmap.md` para a ordem completa.
 
 ## Convenções
 
@@ -1042,7 +1041,53 @@ Todas as tabelas desta fase têm RLS habilitado com policies
 `parent_goal_id` (self-FK em `goals`), `weekly_plans.quarterly_goal_id` e
 `reward_redemptions.reward_id`.
 
-## Relacionamentos-chave (Fase 0/1/2/3/4/5/6)
+## Fase 7 — Notificações Push
+
+- **`push_subscriptions`**: `id`, `user_id`, `endpoint`, `p256dh`, `auth`,
+  `user_agent`, `is_active`, `created_at`, `updated_at`.
+  `unique(user_id, endpoint)`. Chaves PÚBLICAS do dispositivo (o browser
+  gera), nunca um secret do servidor.
+- **`notification_preferences`**: uma linha por usuário (`user_id` PK).
+  Toggles `in_app_enabled`/`push_enabled` + 8 categorias
+  (`tasks/water/diet/workout/weight/spiritual/finance/business_enabled`) +
+  `daily_summary_enabled`/`weekly_summary_enabled`/`daily_summary_time` +
+  `quiet_hours_enabled`/`quiet_hours_start`/`quiet_hours_end`. Criada
+  automaticamente junto com `profiles` (trigger em `auth.users`).
+- **`scheduled_notifications`**: fila/estado de envio PUSH — `id`,
+  `user_id`, `category`, `entity_id` (nullable, id de origem para
+  revalidação), `notification_key`, `title`, `body`, `url`, `status`
+  (`pending`/`sent`/`cancelled`/`failed`), `scheduled_for`,
+  `attempt_count`, `locked_at`, `sent_at`, `cancelled_at`, `failed_at`,
+  `last_error`, `created_at`. `unique(user_id, notification_key)`. IN_APP
+  continua sendo `notifications` (Fase 1) — esta tabela é exclusiva do
+  ciclo de vida de PUSH.
+
+RPCs (todas `SECURITY DEFINER`, restritas a `service_role` — nunca
+chamáveis por `authenticated`/`anon`):
+
+- `is_within_quiet_hours(hora, início, fim)` / `user_is_in_quiet_hours(user_id, at)`:
+  cálculo de horário silencioso, cruzando meia-noite quando início > fim.
+- `generate_task_reminders()` / `generate_water_reminders()` /
+  `generate_workout_reminders()` / `generate_devotional_reminders()`:
+  geram lembretes com checagem de estado atual + dedup.
+- `generate_daily_summary_notifications()` / `generate_weekly_summary_notifications()`:
+  reaproveitam `get_progress_summary`/`get_weekly_review_snapshot` (Fase 6,
+  estendidas com `p_user_id uuid default auth.uid()`).
+- `generate_scheduled_notifications()`: orquestra as 6 acima.
+- `select_due_push_notifications(p_limit)`: revalida estado (cancelamento
+  lógico), filtra quiet hours, tranca (`locked_at`) e devolve as linhas
+  prontas para envio.
+- `mark_push_notification_sent(id)` / `mark_push_notification_failed(id, erro)`:
+  registram o resultado do envio real (feito na Edge Function).
+- `deactivate_push_subscription(id)`: `is_active = false` (nunca DELETE).
+
+Edge Functions (Deno, `supabase/functions/`): `generate-notifications`
+(chama `generate_scheduled_notifications`) e `send-push` (chama
+`select_due_push_notifications`, envia via Web Push/VAPID usando
+`npm:web-push`, registra o resultado). Ver `business-rules.md` > Fase 7 >
+56 para a dependência externa de agendamento ainda pendente.
+
+## Relacionamentos-chave (Fase 0/1/2/3/4/5/6/7)
 
 ```
 auth.users (1) — (1) profiles
@@ -1107,6 +1152,9 @@ profiles (1) — (N) weekly_reviews
 profiles (1) — (N) rewards
 rewards (1) — (N) reward_redemptions
 profiles (1) — (N) user_achievements
+profiles (1) — (N) push_subscriptions
+profiles (1) — (1) notification_preferences
+profiles (1) — (N) scheduled_notifications
 ```
 
 ## Notas de simplificação

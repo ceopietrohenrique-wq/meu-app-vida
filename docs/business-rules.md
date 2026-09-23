@@ -1,14 +1,15 @@
-# Regras de Negócio — Fase 1 a Fase 6
+# Regras de Negócio — Fase 1 a Fase 7
 
 > Cobre as regras críticas necessárias para tarefas, hábitos, XP (Fase 1),
 > peso/IMC/água/alimentação/treino (Fase 2), devocional/estudo bíblico/
 > plano de leitura/orações/versículos (Fase 3), contas/transações/
 > categorias/orçamentos/recorrências (Fase 4), clientes/leads/catálogo/
-> ofertas/vendas/estoque/indicadores empresariais (Fase 5) e dashboard
+> ofertas/vendas/estoque/indicadores empresariais (Fase 5), dashboard
 > consolidado/revisão semanal/metas trimestrais/recompensas/conquistas/
-> busca global (Fase 6). Toda regra aqui descrita precisa ter teste unitário
-> correspondente antes da fase respectiva ser considerada concluída (gate
-> da fase, ver `roadmap.md`).
+> busca global (Fase 6) e notificações push/preferências/quiet
+> hours/jobs agendados/resumo diário/resumo semanal (Fase 7). Toda regra
+> aqui descrita precisa ter teste unitário correspondente antes da fase
+> respectiva ser considerada concluída (gate da fase, ver `roadmap.md`).
 
 ## 1. XP — regra crítica de idempotência
 
@@ -945,3 +946,301 @@ Conforme `CLAUDE.md` e o gate da Fase 6 (`roadmap.md`):
   correspondente; revisão semanal calcula e salva; criar/resgatar
   recompensa; busca global encontra e navega até um resultado; bottom nav
   mobile mostra Progresso real e agrupa o resto em Menu.
+
+## 48. Push subscriptions — chaves públicas do dispositivo, nunca secret
+
+- `push_subscriptions` guarda `endpoint`/`p256dh`/`auth` do
+  `PushSubscription` que o PRÓPRIO browser do usuário gera — são chaves
+  PÚBLICAS do dispositivo, nunca um secret do servidor. A chave PRIVADA
+  VAPID nunca é lida por nenhuma tabela nem pelo client: só existe como
+  secret da Edge Function de envio.
+- `unique(user_id, endpoint)` + upsert torna resubscrever no mesmo
+  dispositivo idempotente — nunca duas linhas para o mesmo endpoint.
+- Nunca `DELETE` automático em erro transitório de envio — `is_active`
+  só vira `false` quando o push service confirma endpoint inválido/expirado
+  (HTTP 404/410), nunca por timeout de rede ou erro 5xx.
+
+## 49. Permissão de push — nunca automática
+
+- `Notification.requestPermission()` só é chamado quando o usuário clica em
+  "Ativar notificações push" nas Configurações — nunca ao carregar o app
+  (CLAUDE.md > Fase 7 > 3).
+- Os 3 estados do browser (`granted`/`denied`/`default`) são tratados
+  explicitamente. `denied` mostra uma mensagem explicando que a permissão
+  foi bloqueada no navegador — nunca tenta pedir de novo (o próprio browser
+  não reabre o prompt nesse estado; insistir seria UX ruim e inútil).
+
+## 50. Preferências de notificação — uma linha por usuário
+
+- `notification_preferences` é uma linha por usuário (não uma tabela de
+  categorias) — criada automaticamente junto com `profiles` (mesmo trigger
+  `on_auth_user_created`, réplica para preferências). "Não precisa de
+  configuração exageradamente granular" (CLAUDE.md > Fase 7 > 4): toggles
+  de canal (in-app/push) + 8 categorias + 2 resumos + quiet hours, tudo
+  booleano/horário simples.
+- Presets ESSENCIAL/EQUILIBRADO/INTENSO são só um atalho de UI que ajusta
+  várias colunas de uma vez — nunca um valor armazenado à parte (evitaria
+  uma segunda fonte de verdade que pode dessincronizar dos toggles reais).
+
+## 51. Horário silencioso — cruza meia-noite, nunca bloqueia sem querer
+
+- `is_within_quiet_hours(hora_local, início, fim)` é uma função pura: se
+  `início < fim`, intervalo normal; se `início > fim`, cruza a meia-noite
+  (ex.: 22:00 → 07:00); se `início = fim`, DESLIGADO (nunca bloqueia o dia
+  inteiro por um erro de configuração igual início=fim).
+- `user_is_in_quiet_hours` resolve o fuso do usuário (`profiles.timezone`)
+  antes de comparar — mesmo padrão de conversão de timezone da Fase 6.
+- Só PUSH respeita quiet hours (SPEC-ORIGINAL.md > HORÁRIO SILENCIOSO:
+  "eventos críticos somente se explicitamente configurados" — nenhum evento
+  crítico foi configurado nesta fase, então todo push não-crítico espera).
+  IN_APP nunca é silenciado — é passivo (só aparece quando o usuário abre o
+  app), não interrompe como push.
+
+## 52. Notificações inteligentes — estado atual sempre revalidado
+
+- Cada gerador (`generate_task_reminders`, `generate_water_reminders`,
+  `generate_workout_reminders`, `generate_devotional_reminders`) verifica o
+  estado ANTES de gerar: tarefa já concluída/cancelada? meta de água já
+  batida hoje? treino já concluído? devocional com os 3 checks completos?
+  Se sim, não gera (SPEC-ORIGINAL.md > NOTIFICAÇÕES INTELIGENTES).
+- Água usa 3 janelas fixas por dia (manhã/tarde/noite) — nunca a cada
+  execução do job, para não virar spam. Ao atingir a meta, as janelas
+  restantes daquele dia simplesmente não geram mais nada (a condição de
+  "meta já batida" já bloqueia).
+
+## 53. Deduplicação — notification_key único em cada camada
+
+- IN_APP (`notifications`, Fase 1) e PUSH (`scheduled_notifications`, nova)
+  têm cada uma seu próprio `UNIQUE(user_id, notification_key)` — chaves no
+  formato `CATEGORIA:{id}:{data}` (`TASK_REMINDER:{task_id}:{date}`,
+  `WATER_REMINDER:{date}:{slot}`, `WORKOUT_REMINDER:{session_id}:{date}`,
+  `DEVOTIONAL:{date}`, `DAILY_SUMMARY:{date}`, `WEEKLY_SUMMARY:{week_start}`
+  — mesmo padrão de `BUDGET_ALERT:{budget_id}:{threshold}:{period}` já
+  usado desde a Fase 4).
+- Todo INSERT usa `ON CONFLICT (...) DO NOTHING` — rodar o gerador várias
+  vezes (retry de job, cron duplicado) nunca duplica.
+
+## 54. Cancelamento lógico — revalidado de novo no momento do envio
+
+- Gerar e enviar são passos SEPARADOS no tempo (o job de geração roda, o de
+  envio roda depois, respeitando quiet hours) — entre os dois, o usuário
+  pode ter concluído a atividade. `select_due_push_notifications` revalida
+  cada pendência (tarefa/treino/água/devocional) usando a MESMA condição do
+  gerador antes de devolver para envio; se não é mais relevante, marca
+  `cancelled` (nunca envia desatualizado).
+- `status` é uma máquina de estados terminal: `pending` → `sent` |
+  `cancelled` | `failed`. Nunca regride, nunca é apagado (histórico
+  preservado).
+- `daily_summary`/`weekly_summary` não têm condição de cancelamento — um
+  resumo já devido continua relevante (não fica "desatualizado" da mesma
+  forma que um lembrete de ação pendente).
+
+## 55. Resumo diário e semanal — reaproveitam RPCs existentes
+
+- Resumo diário reaproveita `get_progress_summary(hoje, hoje, user_id)` —
+  extensão da Fase 6, sem recalcular tarefas/hábitos/treino/água/devocional
+  de novo — e só soma o que falta (gastos pessoais do dia, vendas do dia).
+- Resumo semanal reaproveita `get_weekly_review_snapshot(week_start,
+  user_id)` inteiro — a mesma função da Fase 6.
+- As duas funções da Fase 6 ganharam um parâmetro `p_user_id uuid default
+  auth.uid()` para poderem ser chamadas pelo job (sem sessão de usuário,
+  `auth.uid()` seria null) sem duplicar as ~15 subqueries de cada uma.
+  Chamadas existentes do app (sem esse argumento) continuam idênticas.
+- Só entra na mensagem o que tem dado real (`array_length(v_parts,1) is
+  null` pula o envio) — nunca um resumo vazio "para preencher espaço"
+  (CLAUDE.md > Fase 7 > 10).
+- Resumo semanal só é gerado no ÚLTIMO dia da semana configurada
+  (`week_start_date(hoje, profiles.week_start) + 6 = hoje`), a partir das
+  20h locais — uma vez por semana, nunca todo dia.
+
+## 56. Jobs — geração/seleção/envio/registro sempre separados
+
+- `generate_scheduled_notifications()` (geração) → `Edge Function
+  generate-notifications`. `select_due_push_notifications()` (seleção +
+  revalidação + quiet hours) → dentro da `Edge Function send-push`, que
+  também faz o envio real (Web Push exige HTTP + assinatura VAPID, não dá
+  pra fazer em SQL puro) e registra o resultado
+  (`mark_push_notification_sent`/`mark_push_notification_failed`).
+- Todas as funções de job são `SECURITY DEFINER`, revogadas de
+  `anon`/`authenticated` explicitamente (não só de `public` — ver bug real
+  na seção "Riscos conhecidos" abaixo) e concedidas só a `service_role`. A
+  service_role key só existe na Edge Function (Deno), nunca no browser.
+- Idempotência: `ON CONFLICT DO NOTHING` na geração + `locked_at` na
+  seleção (impede duas execuções concorrentes do job pegarem a mesma
+  notificação) + `attempt_count` limitado a 5 tentativas no envio (nunca
+  loop infinito de retry).
+- Dependência externa documentada: agendar a chamada periódica das duas
+  Edge Functions (pg_cron+pg_net, Supabase Scheduled Functions, ou cron
+  externo autenticado por `CRON_SECRET`) é um passo de configuração de
+  deploy que não pode ser executado localmente nesta sessão — toda a
+  infraestrutura (migrations, RPCs, Edge Functions, testes das funções de
+  job) já está pronta e testada contra o banco real.
+
+## 57. Testes obrigatórios da Fase 7
+
+- RLS: `push_subscriptions`/`notification_preferences`/
+  `scheduled_notifications` isolados por usuário; nenhuma coluna de secret
+  de servidor exposta; funções de job SECURITY DEFINER inacessíveis a
+  `authenticated`.
+- `is_within_quiet_hours`: intervalo normal, cruzando meia-noite, desligado
+  (início = fim), e a versão que resolve timezone do usuário
+  (`user_is_in_quiet_hours`).
+- Dedup: gerar 2x não duplica (tarefas, devocional, resumo diário, resumo
+  semanal).
+- Estado atual: tarefa concluída não gera lembrete; devocional já completo
+  não gera lembrete.
+- Cancelamento lógico: tarefa concluída DEPOIS do agendamento, antes do
+  envio, é revalidada e cancelada.
+- Quiet hours: notificação de usuário em quiet hours não é selecionada para
+  envio, mas continua `pending` (não cancela).
+- Retry idempotente: `mark_push_notification_failed` chamado 5x vira
+  `failed` terminal, nunca mais reselecionado (sem loop infinito).
+- E2E: preferências de notificação salvam e persistem após reload; presets
+  de intensidade ajustam várias categorias de uma vez; interface funciona
+  em 375/390/430px sem overflow horizontal.
+
+## 58. Auditoria final — segurança de `p_user_id` e Edge Functions
+
+- `get_progress_summary`/`get_weekly_review_snapshot` aceitam `p_user_id`
+  para o job de resumo (que roda sem sessão de usuário). Confirmado por
+  teste real contra o banco: RLS já bloqueava um usuário `authenticated`
+  lendo dado de outro por esse caminho (as subqueries internas continuam
+  sujeitas à policy de cada tabela, avaliada com o `auth.uid()` real da
+  sessão — não com `p_user_id`). Ainda assim, um guard EXPLÍCITO foi
+  adicionado no topo das duas funções (`if p_user_id is distinct from
+  auth.uid() and auth.role() <> 'service_role' then raise exception`) como
+  defesa em profundidade — nunca depender só de RLS implícita para uma
+  garantia crítica, mesmo padrão de "RLS sozinha não é suficiente" já usado
+  em triggers de ownership desde a Fase 4.
+- As duas Edge Functions (`generate-notifications`, `send-push`) exigem
+  `Authorization: Bearer <CRON_SECRET>` quando `CRON_SECRET` está
+  configurado — nenhum usuário comum (nem autenticado no app) pode
+  acioná-las: elas não fazem parte do schema do PostgREST, só respondem a
+  chamadas HTTP diretas autenticadas com esse secret, que só o
+  scheduler/operador possui. Nenhuma das duas aceita `user_id` do
+  chamador — processam TODOS os usuários elegíveis de uma vez, sem
+  parametrização por payload, então não há como um chamador autorizado
+  "mirar" um usuário específico mesmo tendo o secret. Erros retornados são
+  sempre mensagens de lógica de negócio (nunca a service_role key nem a
+  chave privada VAPID).
+
+## 59. Escopo real das categorias — o que é automação de verdade
+
+- **Geradores automáticos implementados** (job real, roda sozinho): Tarefas
+  (`TASK_REMINDER`), Água (`WATER_REMINDER`), Treino (`WORKOUT_REMINDER`),
+  Espiritual/Devocional (`DEVOTIONAL`), Resumo diário (`DAILY_SUMMARY`),
+  Resumo semanal (`WEEKLY_SUMMARY`).
+- **Mecanismo parcial pré-existente**: Financeiro tem `BUDGET_ALERT`
+  (trigger da Fase 4, IN_APP), mas esse trigger NUNCA consulta
+  `notification_preferences.finance_enabled` — desligar o toggle
+  "Financeiro" na tela de preferências não desliga os alertas de
+  orçamento. A UI mostra essa nota explicitamente ao lado do toggle,
+  para não sugerir uma automação (controlável) que não existe.
+- **Preferência sem gerador ainda** (só a coluna/toggle existe, nenhum job
+  gera notificação por ela hoje): Dieta, Peso, Negócios. A UI marca essas
+  3 com "sem lembrete automático ainda" ao lado do checkbox — extensão
+  futura, mesmo padrão dos 4 geradores existentes (nova função
+  `generate_*_reminders()`, mesma estrutura de dedup/estado/preferência).
+- Estoque e XP (citados na spec original) não têm preferência nem gerador
+  nesta fase — fora do escopo dos exemplos de dedup que o pedido de
+  auditoria trouxe (`TASK_REMINDER`/`WATER_REMINDER`/`WORKOUT_REMINDER`/
+  `DEVOTIONAL`/`BUDGET`/`DAILY_SUMMARY`/`WEEKLY_SUMMARY`).
+
+## 60. Subscriptions — auditoria final
+
+- Usuário revoga push a qualquer momento (`useUnsubscribeFromPush`):
+  chama `PushSubscription.unsubscribe()` no browser e
+  `is_active = false` no banco — client tem RLS própria para isso (é dono
+  da linha), não depende de nenhuma função de job.
+- `unique(user_id, endpoint)` + upsert: confirmado por teste que resubscrever
+  a MESMA subscription (mesmo endpoint) 3x seguidas nunca cria mais de uma
+  linha.
+- `deactivate_push_subscription` (chamada pela Edge Function só em 404/410
+  confirmado do push service) nunca deleta — testado que a linha continua
+  existindo com `is_active=false`.
+- Erro transitório (rede, 5xx) nunca desativa — só os 2 status codes que
+  significam "endpoint não existe mais" disparam a desativação (ver código
+  de `supabase/functions/send-push/index.ts`).
+
+## 61. Ativação real — deploy, correções e scheduler de produção
+
+**Deploy real executado e validado ponta a ponta** (não é mais só
+infraestrutura local): `generate-notifications` e `send-push` deployadas em
+produção (`supabase functions deploy ... --no-verify-jwt`), secrets
+configurados (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`,
+`CRON_SECRET`), subscription real criada em `/configuracoes`, notificação de
+teste enviada e recebida de verdade no navegador, clique confirmado
+navegando para a URL de destino.
+
+Dois bugs reais encontrados e corrigidos durante a ativação:
+
+- **`verify_jwt: true` (padrão de deploy) anulava o `CRON_SECRET`**: o
+  gateway do Supabase aceitava qualquer JWT válido — inclusive a `anon key`
+  pública — antes do código da function rodar, então o check de
+  `CRON_SECRET` no código nunca era alcançado por esse caminho. Confirmado
+  por teste real: `generate-notifications` respondia 200 usando só a `anon
+  key`, sem o secret. Corrigido com redeploy `--no-verify-jwt` nas duas
+  functions — agora `CRON_SECRET` é o único portão (`anon key` sozinha e
+  ausência de header retornam 401 do PRÓPRIO código, não mais um bypass do
+  gateway).
+- **Par de chaves VAPID gerado à mão estava malformado** (chave privada
+  decodificava para ~18 bytes em vez dos 32 exigidos) — `send-push`
+  quebrava com 500 em toda chamada. Corrigido gerando um par novo com
+  `webpush.generateVAPIDKeys()` (a própria biblioteca, formato garantido),
+  nunca impresso em terminal/log — só escrito em arquivo local temporário,
+  lido diretamente para `supabase secrets set`, depois apagado.
+
+### Scheduler de produção — GitHub Actions
+
+`.github/workflows/notifications-cron.yml`, reaproveitando a infraestrutura
+de CI já existente (`.github/workflows/ci.yml`) como referência de estilo,
+mas como um workflow separado (não faz sentido misturar cron de produção
+com o pipeline de lint/test/build de PR).
+
+- **Gatilhos**: `schedule` (cron `*/15 * * * *` — a cada 15 minutos, a
+  menor cadência razoável no GitHub Actions; o mínimo técnico é 5 min, mas
+  execuções agendadas podem atrasar sob carga) e `workflow_dispatch` (teste
+  manual).
+- **Ordem**: dois steps sequenciais no mesmo job — `generate-notifications`
+  primeiro, `send-push` depois. Se o primeiro step falhar (`exit 1` quando
+  o HTTP status não é 2xx), o GitHub Actions já não roda o step seguinte
+  por padrão — a ordem "só envia depois de gerar com sucesso" é garantida
+  pela semântica normal de steps do Actions, sem lógica extra.
+- **Autenticação**: `Authorization: Bearer ${{ secrets.CRON_SECRET }}` —
+  nunca a `anon key`, nunca um JWT do Supabase. `CRON_SECRET` vive
+  exclusivamente em GitHub Actions Secrets do repositório, nunca no YAML,
+  nunca commitado. O valor configurado no GitHub é o MESMO já definido como
+  secret da Edge Function no Supabase (`supabase secrets set CRON_SECRET=...`)
+  — os dois lados precisam bater.
+- **Sem dados sensíveis no log**: o workflow nunca ecoa o header
+  `Authorization` explicitamente; o GitHub Actions mascara automaticamente
+  qualquer valor de `secrets.*` que apareça em qualquer log. O corpo das
+  respostas logado (`cat response.json`) só contém contagens agregadas
+  (`generated_count`, `selected/sent/failed`) — nunca dado de usuário nem
+  secret.
+- **Concorrência**: `concurrency: group: notifications-cron` evita duas
+  execuções do workflow sobrepostas — redundante com o lock de banco
+  (`locked_at`), mas evita gasto de minutos de CI à toa.
+- **Execução manual**: aba "Actions" do repositório no GitHub →
+  "Notifications Cron" → botão "Run workflow".
+- **Diagnóstico de falha**: aba "Actions" → clicar na execução falha → o
+  log de cada step mostra o HTTP status e o corpo da resposta da function
+  correspondente; um `::error::` anotado aparece destacado no resumo da
+  run. Erros de autenticação aparecem como status 401 no step
+  correspondente (secret ausente/errado no GitHub, ou dessincronizado do
+  secret da Edge Function no Supabase).
+
+**Validado de verdade**: `workflow_dispatch` manual executado, run
+`35814253975`, `conclusion: success`, confirmado de forma independente via
+API pública do GitHub (`GET /repos/.../actions/runs/35814253975` e
+`.../jobs` — não só relato do usuário), com os dois steps
+("Generate notifications", "Send push") verdes em ordem. `CRON_SECRET` foi
+rotacionado para um valor novo, configurado igual nos dois lados (Supabase
+secret + GitHub Actions secret) — a autenticação funcionou com o valor
+novo, provando que a sincronização entre os dois não é um acoplamento
+frágil de um valor antigo. O arquivo do workflow está commitado e
+empurrado para `master` (único commit desta fase feito até aqui, escopo
+exclusivo do workflow — o resto da Fase 7 segue pendente de aprovação) —
+como `schedule:` já está no branch default, a execução automática a cada
+15 minutos passa a valer a partir da próxima janela do GitHub Actions,
+sem nenhuma ação adicional.
