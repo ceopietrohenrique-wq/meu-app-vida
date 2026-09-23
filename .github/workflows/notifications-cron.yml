@@ -1,0 +1,73 @@
+# Fase 7 — Notificações Push > Jobs agendados (item obrigatório final).
+#
+# Chama as duas Edge Functions de notificação, NESTA ordem: primeiro
+# generate-notifications (gera/agenda), depois send-push (seleciona os
+# pendentes — já revalida estado e quiet hours — e envia de verdade). As
+# duas foram deployadas com --no-verify-jwt (ver docs/business-rules.md >
+# Fase 7 > 61), então o único portão de autenticação é o header
+# `Authorization: Bearer <CRON_SECRET>` — nunca a anon key, nunca um JWT do
+# Supabase.
+#
+# CRON_SECRET vive exclusivamente em GitHub Actions Secrets
+# (${{ secrets.CRON_SECRET }}) — nunca aparece neste arquivo, nunca é
+# impresso no log (a Actions mascara automaticamente qualquer valor
+# referenciado via `secrets.*`, mas o workflow também nunca faz `echo` dele
+# de propósito).
+
+name: Notifications Cron
+
+on:
+  schedule:
+    # A cada 15 minutos — a menor cadência razoável para o GitHub Actions
+    # (o mínimo técnico é 5 min, mas execuções agendadas no free tier podem
+    # atrasar sob carga; 15 min é o valor já documentado em
+    # docs/business-rules.md > Fase 7 > 56 desde a auditoria de infra).
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+# Evita duas execuções sobrepostas (o job já é idempotente no banco —
+# locked_at trava linha por linha — mas não há motivo para rodar em
+# paralelo).
+concurrency:
+  group: notifications-cron
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # URL pública do projeto (mesma origem de NEXT_PUBLIC_SUPABASE_URL, que já
+  # é enviada a todo browser) — não é secret, só o CRON_SECRET é.
+  SUPABASE_FUNCTIONS_URL: https://qznmgcjgbocvrycflogx.supabase.co/functions/v1
+
+jobs:
+  run-notifications:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate notifications
+        run: |
+          set -euo pipefail
+          status=$(curl -sS -o response.json -w "%{http_code}" -X POST \
+            "$SUPABASE_FUNCTIONS_URL/generate-notifications" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}")
+          echo "generate-notifications HTTP status: $status"
+          cat response.json
+          echo
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            echo "::error::generate-notifications respondeu com status $status"
+            exit 1
+          fi
+
+      - name: Send push (só roda se a geração acima teve sucesso)
+        run: |
+          set -euo pipefail
+          status=$(curl -sS -o response.json -w "%{http_code}" -X POST \
+            "$SUPABASE_FUNCTIONS_URL/send-push" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}")
+          echo "send-push HTTP status: $status"
+          cat response.json
+          echo
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            echo "::error::send-push respondeu com status $status"
+            exit 1
+          fi
