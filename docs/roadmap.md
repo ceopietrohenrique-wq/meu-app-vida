@@ -75,3 +75,9 @@ desktop.
 Auth, RLS, Build, TypeScript, Tests, Migrations, Env, PWA, Push, Mobile,
 Desktop, Performance, Accessibility, Error states, Backup/export — nenhum
 item crítico pode estar quebrado para marcar a versão como pronta.
+
+**Backup/export**: resolvido na auditoria transversal pós-Fase 8 (CSV de
+transações, CSV de vendas, backup JSON estruturado — sem importação nesta
+versão). Não é uma fase nova do roadmap, é o fechamento de uma lacuna que
+o checklist acima já previa. Ver `README.md` > Exportação e backup e
+`docs/business-rules.md` > Exportação/Backup.

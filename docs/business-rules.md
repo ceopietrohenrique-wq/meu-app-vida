@@ -1412,3 +1412,54 @@ corretos), não esse estado vazio transitório.
 - Regressão: suíte completa de `e2e/fase7.spec.ts` (push/subscriptions/
   preferências) re-executada sem nenhuma alteração de código de push —
   confirma que o refinamento de cache/offline não quebrou nada da Fase 7.
+
+## 69. Exportação/Backup (auditoria pós-Fase 8 — lacuna de escopo resolvida)
+
+Não é uma fase nova — é o fechamento de um item que `roadmap.md` já listava
+no "Checklist final antes de produção" mas nenhuma das 8 fases alocou.
+
+- **Arquitetura**: tudo roda 100% client-side, reaproveitando o mesmo
+  Supabase client autenticado do resto do app. Nunca uma rota
+  server-side/Route Handler nova, nunca `service_role` — RLS sozinha já
+  garante isolamento por usuário, do mesmo jeito que qualquer outra leitura
+  do produto. Isso é deliberado: criar uma rota server-side só duplicaria a
+  mesma proteção que o client autenticado já tem, sem ganho real (CLAUDE.md
+  > Simplicidade > Escalabilidade).
+- **Paginação obrigatória**: `fetchAllRows` (`shared/lib/export/paginate.ts`)
+  pagina em lotes de 1000 via `.range()` — nunca um `select("*")` sem
+  limite. Sem isso, um usuário com muitas linhas teria dado faltando
+  SILENCIOSAMENTE no export (o PostgREST pode limitar linhas por request).
+- **CSV**: RFC 4180 (vírgula como separador, ponto decimal, aspas
+  escapando vírgula/aspas/quebra de linha), BOM UTF-8 pro Excel detectar a
+  codificação certa, `\r\n` como quebra de linha. Nunca reformata data
+  (mantém `YYYY-MM-DD`, sem ambiguidade de locale) nem dinheiro (usa
+  `centsToDecimalString`, a mesma conversão de todo o resto do app — nunca
+  uma segunda lógica de formatação monetária).
+- **Lucro/margem no CSV de vendas**: reaproveita EXATAMENTE a fórmula da
+  RPC `get_business_dashboard_summary` — `computeGrossProfitCents`/
+  `computeMarginPercent` foram promovidas de `domains/business/utils/` pra
+  `domains/sales/utils/sale-indicators.ts` (o dono natural do conceito,
+  calculado a partir de campos da própria tabela `sales`), com
+  `business-indicators.ts` reexportando de lá pra nenhum import existente
+  quebrar — mesmo padrão de promoção já usado para `shared/lib/streak.ts`
+  (nunca duas fórmulas divergentes de "lucro").
+- **Backup JSON**: `schemaVersion` (atualmente `1`) + `generatedAt` +
+  `domains` (agrupado por domínio de negócio, nunca uma lista técnica
+  plana de tabelas) + `notes` (limitações documentadas, ex.: histórico de
+  status de venda exigindo ordem específica numa restauração futura).
+  `user_id` é removido de cada linha (é sempre o mesmo valor — o dono do
+  backup — repeti-lo em milhares de linhas seria ruído, não informação).
+  **Nunca inclui** `push_subscriptions`/`scheduled_notifications` (dado
+  técnico/efêmero, sem valor de backup — reativar push num backup restaurado
+  poderia mandar notificação pra um dispositivo que nem existe mais).
+- **Sem importação nesta versão** — só geração/download. Restauração fica
+  documentada como trabalho futuro, nunca fingida como suportada.
+- **UX**: botão desabilita durante o próprio download (`isPending`, mesmo
+  padrão de todo o resto do app) — nunca double-submit. Nome de arquivo
+  sempre com a data do dia (`transacoes-2026-09-23.csv`, etc.).
+- Testes: `supabase/tests/export-fase-audit.test.ts` prova contra o banco
+  real que usuário A nunca vê dado de B em nenhum dos 3 formatos, dataset
+  vazio produz CSV/JSON válidos, e o backup nunca contém
+  `push_subscriptions`/`scheduled_notifications`. `e2e/export-audit.spec.ts`
+  prova o fluxo real de download (nome de arquivo, tipo, conteúdo mínimo,
+  UI nunca trava com dataset vazio).

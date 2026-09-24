@@ -8,6 +8,8 @@ dados, regras de negócio e roadmap em [`docs/`](./docs).
 > Estado atual: Fase 8 (Refinamento PWA) — última fase do roadmap. Todas as
 > 8 fases (Fundação, Núcleo de execução, Saúde, Espiritual, Financeiro,
 > Negócios, Progresso, Notificações Push, Refinamento PWA) implementadas.
+> A lacuna de exportação/backup (identificada na auditoria final) também
+> foi resolvida — ver [`## Exportação e backup`](#exportação-e-backup).
 
 ## Stack
 
@@ -219,6 +221,41 @@ Varredura automatizada com axe-core (`e2e/fase8-a11y.spec.ts`) nas páginas
 principais e fluxos críticos (Quick Capture, Busca Global) — falha em
 qualquer violação de impacto `critical`/`serious`. Rode `npm run test:e2e`
 para incluir essa varredura.
+
+## Exportação e backup
+
+Em **Configurações → Dados e backup**, três ações:
+
+- **Exportar transações CSV** — todas as transações financeiras do usuário
+  (`transacoes-AAAA-MM-DD.csv`).
+- **Exportar vendas CSV** — todas as vendas (`vendas-AAAA-MM-DD.csv`).
+  Lucro/margem reaproveitam a mesma fórmula da RPC
+  `get_business_dashboard_summary` (nunca uma segunda definição).
+- **Baixar backup JSON** — todos os dados do usuário, agrupados por domínio,
+  com versão de schema e timestamp de geração
+  (`backup-meu-app-vida-AAAA-MM-DD.json`).
+
+Cada exportação roda inteiramente no client autenticado (o mesmo Supabase
+client do resto do app) — nunca um `userId` vindo do browser, nunca
+`service_role`, sempre protegido por RLS. Consultas grandes são paginadas
+em lotes de 1000 linhas (`fetchAllRows`), então um histórico grande nunca
+é truncado silenciosamente. Nada é enviado para fora da aplicação; o
+arquivo é gerado e baixado direto no navegador.
+
+**O que entra no backup**: perfil, tarefas/hábitos/planejamento, saúde
+(peso/água/dieta/treino), espiritual (devocional/leitura/oração),
+financeiro (contas/transações/orçamentos), negócios (clientes/vendas/
+estoque), progresso (XP/recompensas/conquistas/revisões), preferências de
+notificação.
+
+**O que NUNCA entra**: `push_subscriptions` (chaves de dispositivo),
+`scheduled_notifications` (fila técnica interna), qualquer secret/token/
+credencial.
+
+**Sem importação nesta versão** — o backup é só para preservação/
+recuperação manual futura. `sale_status_changes` (histórico de status de
+venda) está incluído no backup mas exige cuidado especial numa eventual
+restauração (precisa ser aplicado na ordem certa, depois das vendas).
 
 ## Performance
 

@@ -4,14 +4,18 @@
  * Definições dos indicadores) — nunca duas fontes de verdade divergentes,
  * mas a lógica pura fica aqui para ter cobertura de teste unitário com
  * valores exatos, sem depender do banco (CLAUDE.md > Fase 5 > 12).
+ *
+ * `computeGrossProfitCents`/`computeMarginPercent` moraram aqui até a
+ * auditoria pós-Fase 8 (exportação de vendas): re-exportadas de
+ * `domains/sales/utils/sale-indicators.ts`, o dono natural do conceito,
+ * pra não duplicar a fórmula — este arquivo mantém a mesma API pública de
+ * antes (nenhum import existente quebra).
  */
 
-export function computeGrossProfitCents(
-  netRevenueCents: number,
-  directCostsCents: number,
-): number {
-  return netRevenueCents - directCostsCents;
-}
+export {
+  computeGrossProfitCents,
+  computeMarginPercent,
+} from "@/domains/sales/utils/sale-indicators";
 
 export function computeNetProfitCents(
   grossProfitCents: number,
@@ -19,15 +23,6 @@ export function computeNetProfitCents(
   feesCents: number,
 ): number {
   return grossProfitCents - operatingExpensesCents - feesCents;
-}
-
-/** Margem = lucro bruto / receita líquida × 100. Nunca divide por zero. */
-export function computeMarginPercent(
-  grossProfitCents: number,
-  netRevenueCents: number,
-): number | null {
-  if (netRevenueCents <= 0) return null;
-  return (grossProfitCents / netRevenueCents) * 100;
 }
 
 /**
